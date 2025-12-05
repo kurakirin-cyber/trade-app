@@ -1,344 +1,240 @@
 import base64
 import json
 import os
-import textwrap
 from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 from flask import Flask, render_template, request
 from openai import OpenAI
 
-# ========= 自分の OpenAI APIキー =========
-OPENAI_API_KEY = "sk-ここに自分のキー"
-# ======================================
-
-client = OpenAI(api_key=OPENAI_API_KEY)
+# ★ここを自分の API キーに差し替えてね
+client = OpenAI(api_key="YOUR_OPENAI_API_KEY")
 
 app = Flask(__name__)
 
 CONTEXT_FILE = "contexts.json"
 
 
-# ---------- 共通ユーティリティ ----------
+# ---------- 環境データの保存 / 読み込み ----------
 
-def load_contexts():
-    """銘柄ごとの環境情報を読み込み（JSON が無ければ空 dict）"""
+def load_contexts() -> Dict[str, Any]:
+    """contexts.json から銘柄ごとの環境データを読む"""
     if not os.path.exists(CONTEXT_FILE):
         return {}
     try:
         with open(CONTEXT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        if isinstance(data, dict):
-            return data
-        return {}
+        return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
 
-def save_contexts(contexts: dict):
-    """銘柄ごとの環境情報を保存"""
+def save_contexts(contexts: Dict[str, Any]) -> None:
+    """銘柄ごとの環境データを contexts.json に保存"""
     with open(CONTEXT_FILE, "w", encoding="utf-8") as f:
         json.dump(contexts, f, ensure_ascii=False, indent=2)
 
 
-def to_data_url(img_bytes: bytes) -> str:
+def img_bytes_to_data_url(img_bytes: bytes) -> str:
+    """画像バイト列 → data URL"""
     b64 = base64.b64encode(img_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
 
 
-# ---------- GPT: 環境要約を作る ----------
+# ---------- OpenAI での判定ロジック ----------
 
-def build_environment_summary(
+def call_gpt_for_intraday(
     symbol: str,
-    name: str,
-    daily_bytes: bytes | None,
-    extra_imgs: list[bytes],
-    urls: list[str],
+    env_summary: Optional[str],
+    chart_img_bytes: bytes,
+    board_img_bytes: bytes,
     memo_text: str,
-):
-    contents = []
-
-    base_instruction = f"""あなたは日本株トレード環境アナリストです。
-銘柄コード: {symbol}
-銘柄名: {name or "（未入力）"}
-
-ユーザーがアップロードした「日足チャート」「材料に関する画像」「URL」「メモ」から、
-この銘柄の当面の相場環境を日本語で要約してください。
-
-・日足チャート: 中期トレンド、重要なサポート/レジスタンス
-・追加画像: ニュース、ランキングなど
-・URL: IR資料やニュース本文
-・メモ: ユーザーの補足
-
-出力フォーマットは次の JSON のみとします:
-
-{{
-  "summary": "日本語で200文字以内の要約（地合い・トレンド・材料など）"
-}}
-"""
-    contents.append({"type": "input_text", "text": base_instruction})
-
-    if daily_bytes:
-        contents.append(
-            {
-                "type": "input_text",
-                "text": "▼これは日足チャート画像です。中期トレンドを読み取ってください。",
-            }
-        )
-        contents.append({"type": "input_image", "image_url": to_data_url(daily_bytes)})
-
-    for idx, b in enumerate(extra_imgs, start=1):
-        contents.append(
-            {
-                "type": "input_text",
-                "text": f"▼追加参考画像 {idx}。ニュースやランキング情報などです。",
-            }
-        )
-        contents.append({"type": "input_image", "image_url": to_data_url(b)})
-
-    cleaned_urls = [u.strip() for u in urls if u.strip()]
-    for idx, url in enumerate(cleaned_urls, start=1):
-        snippet = ""
-        try:
-            import requests
-
-            resp = requests.get(url, timeout=5)
-            text = resp.text
-            snippet = textwrap.shorten(text, width=2000, placeholder="...")
-        except Exception as e:
-            snippet = f"(URL取得エラー: {e})"
-
-        contents.append(
-            {
-                "type": "input_text",
-                "text": f"▼URL {idx}: {url}\nこのページの内容要約に使ってください。\n抜粋テキスト:\n{snippet}",
-            }
-        )
-
-    memo_text = memo_text.strip()
-    if memo_text:
-        contents.append(
-            {
-                "type": "input_text",
-                "text": f"ユーザーからのメモ:\n{memo_text}",
-            }
-        )
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[{"role": "user", "content": contents}],
-        max_output_tokens=400,
+) -> Dict[str, Any]:
+    """
+    5分足 + 板画像 + メモ + （あれば）環境サマリを投げて、アクション案を返す
+    """
+    system_msg = (
+        "あなたは日本株の短期トレードを手伝うアシスタントです。"
+        "与えられた 5 分足チャートと板のスクショから、"
+        "直近 1〜2 時間程度のエントリー／利確／損切りの方針をわかりやすく提案してください。"
+        "数値は『だいたいの目安』でよいですが、レンジを具体的に示してください。"
     )
 
-    try:
-        output_text = response.output[0].content[0].text
-        data = json.loads(output_text)
-        summary = str(data.get("summary", "")).strip()
-        if not summary:
-            summary = "要約生成に失敗しましたが、環境情報として利用してください。"
-    except Exception:
-        summary = "要約の解析に失敗しました。環境情報の解釈はAIに任せてください。"
-
-    return summary
-
-
-# ---------- GPT: 5分足＋板から判定 ----------
-
-def analyze_intraday(
-    chart_bytes: bytes,
-    board_bytes: bytes,
-    memo_text: str,
-    env_summary: str | None,
-):
-    contents = []
-
-    base_instruction = """あなたは日本株の短期トレードアドバイザーです。
-以下の情報を総合して、数分〜数十分スパンのアクションを判断してください。
-
-必ず次の3択から1つだけ選んでください:
-- "buy"  : 新規買い or 追加エントリーが有利そう
-- "sell" : 利確 or 損切りを含む売りが妥当そう
-- "hold" : まだ様子見が無難
-
-また、可能であれば「どの価格帯を狙うと良さそうか」もシンプルに示してください。
-
-出力フォーマットは次の JSON のみ:
-
-{
-  "action": "buy | sell | hold",
-  "reason": "日本語で150文字以内の理由",
-  "price_hint": "日本語で簡潔な価格帯コメント（例：1550〜1570円で押し目買いを検討）"
-}
-"""
-    contents.append({"type": "input_text", "text": base_instruction})
+    user_text_parts = [
+        f"銘柄コード: {symbol}",
+    ]
 
     if env_summary:
-        contents.append(
+        user_text_parts.append("【この銘柄の環境メモ】")
+        user_text_parts.append(env_summary)
+
+    if memo_text.strip():
+        user_text_parts.append("【トレーダーからの補足メモ】")
+        user_text_parts.append(memo_text.strip())
+
+    user_text_parts.append(
+        "これらを踏まえて、以下の形式で日本語で出力してください。\n\n"
+        "1. 現在の状況の要約（テクニカル + 板の雰囲気）\n"
+        "2. 短期アクション\n"
+        "   - 今の推奨アクション（例: 見送り / 押し目買い / 逆張り買い / 利確売り など）\n"
+        "   - もし『買い』なら：狙いたい買いレンジ（〇〇〜〇〇円）\n"
+        "   - もし『売り』なら：利確を意識したい売りレンジ（〇〇〜〇〇円）\n"
+        "   - 損切りを検討すべきラインの目安\n"
+        "3. 上記アクションを選んだ理由を、チャートと板のどの点からそう判断したのか具体的に\n"
+        "4. 注意点・無理して入らない方がよいパターンがあればその条件\n"
+    )
+
+    user_text = "\n".join(user_text_parts)
+
+    chart_data_url = img_bytes_to_data_url(chart_img_bytes)
+    board_data_url = img_bytes_to_data_url(board_img_bytes)
+
+    resp = client.responses.create(
+        model="gpt-4o-mini",
+        input=[
+            {"role": "system", "content": [{"type": "text", "text": system_msg}]},
             {
-                "type": "input_text",
-                "text": f"【事前に登録された環境・材料の要約】\n{env_summary}",
-            }
-        )
-
-    contents.append(
-        {
-            "type": "input_text",
-            "text": "▼これは5分足チャートです。直近の値動きと出来高から短期トレンドを判断してください。",
-        }
-    )
-    contents.append({"type": "input_image", "image_url": to_data_url(chart_bytes)})
-
-    contents.append(
-        {
-            "type": "input_text",
-            "text": "▼これは現在の気配値（板）の画像です。売り板・買い板の厚さや偏りを判断に使ってください。",
-        }
-    )
-    contents.append({"type": "input_image", "image_url": to_data_url(board_bytes)})
-
-    memo_text = memo_text.strip()
-    if memo_text:
-        contents.append(
-            {
-                "type": "input_text",
-                "text": f"ユーザーからの補足メモ:\n{memo_text}",
-            }
-        )
-
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[{"role": "user", "content": contents}],
-        max_output_tokens=400,
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "input_image", "image_url": {"url": chart_data_url}},
+                    {"type": "input_image", "image_url": {"url": board_data_url}},
+                ],
+            },
+        ],
     )
 
-    try:
-        output_text = response.output[0].content[0].text
-        data = json.loads(output_text)
-        action = str(data.get("action", "hold")).lower()
-        reason = str(data.get("reason", "理由なし"))
-        price_hint = str(data.get("price_hint", "")).strip()
-    except Exception:
-        action = "hold"
-        reason = "出力解析エラーのため様子見としました。"
-        price_hint = ""
+    ai_text = resp.output[0].content[0].text.value
 
-    if action not in ["buy", "sell", "hold"]:
-        action = "hold"
+    # ここではシンプルに「アクション種別」だけ軽く抽出しておく
+    action = "様子見"
+    action_lower = ai_text.lower()
+    if "買" in ai_text and "売" not in ai_text:
+        action = "買い検討"
+    elif "利確" in ai_text or "手仕舞い" in ai_text or "売り" in ai_text:
+        action = "売り検討"
 
-    return action.upper(), reason, price_hint
+    return {
+        "symbol": symbol,
+        "action": action,
+        "full_text": ai_text,
+    }
 
 
-# ---------- ルーティング ----------
+# ---------- Flask ルート ----------
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     contexts = load_contexts()
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    env_message: Optional[str] = None
 
-    # 登録済み銘柄一覧
-    registered_list = []
-    for code, info in contexts.items():
-        registered_list.append(
-            {
-                "code": code,
-                "name": info.get("name", ""),
-                "updated_at": info.get("updated_at", ""),
-            }
-        )
-    registered_list.sort(key=lambda x: x["code"])
-
-    result = None
-    error = None
-    env_message = None
-    selected_code = None
-
-    # URL パラメータ ?code=9984 でプリセット
-    selected_code = request.args.get("code", "").strip() or None
+    judge_symbol = ""
+    env_symbol = ""
 
     if request.method == "POST":
-        form_type = request.form.get("form_type")
-        if form_type == "judge":
-            # ① 5分足＋板 判定フォーム
-            symbol = request.form.get("judge_symbol", "").strip()
-            selected_code = symbol or selected_code
+        form_type = request.form.get("form_type")  # ★どのフォームかを判定
 
-            if not symbol:
-                error = "銘柄コードを入力してください。"
+        # --- ① 判定フォーム ---
+        if form_type == "judge":
+            judge_symbol = request.form.get("judge_symbol", "").strip()
+
+            if not judge_symbol:
+                error = "銘柄コード（判定対象）を入力してください。"
             else:
                 chart_file = request.files.get("chart_image")
                 board_file = request.files.get("board_image")
                 memo_text = request.form.get("judge_memo", "")
 
-                if not chart_file or not chart_file.filename:
+                if not chart_file or chart_file.filename == "":
                     error = "5分足チャート画像を選択してください。"
-                elif not board_file or not board_file.filename:
+                elif not board_file or board_file.filename == "":
                     error = "気配値（板）の画像を選択してください。"
                 else:
                     try:
                         chart_bytes = chart_file.read()
                         board_bytes = board_file.read()
-                        ctx = contexts.get(symbol)
-                        env_summary = ctx.get("summary") if ctx else None
-                        action, reason, price_hint = analyze_intraday(
-                            chart_bytes, board_bytes, memo_text, env_summary
+
+                        env_ctx = contexts.get(judge_symbol)
+                        env_summary = env_ctx.get("summary") if isinstance(env_ctx, dict) else None
+
+                        result = call_gpt_for_intraday(
+                            symbol=judge_symbol,
+                            env_summary=env_summary,
+                            chart_img_bytes=chart_bytes,
+                            board_img_bytes=board_bytes,
+                            memo_text=memo_text,
                         )
-                        result = {
-                            "symbol": symbol,
-                            "action": action,
-                            "reason": reason,
-                            "price_hint": price_hint,
-                        }
                     except Exception as e:
                         error = f"判定中にエラーが発生しました: {e}"
 
+        # --- ② 環境登録フォーム ---
         elif form_type == "env":
-            # ② 環境登録フォーム
-            symbol = request.form.get("env_symbol", "").strip()
-            name = request.form.get("env_name", "").strip()
-            selected_code = symbol or selected_code
+            env_symbol = request.form.get("env_symbol", "").strip()
+            env_name = request.form.get("env_name", "").strip()
+            env_urls_raw = request.form.get("env_urls", "")
+            env_memo = request.form.get("env_memo", "")
 
-            if not symbol:
+            if not env_symbol:
                 error = "銘柄コード（環境登録用）は必須です。"
             else:
                 daily_file = request.files.get("daily_image")
                 extra_files = request.files.getlist("extra_images")
-                urls_text = request.form.get("env_urls", "")
-                env_memo = request.form.get("env_memo", "")
 
-                daily_bytes = (
-                    daily_file.read() if daily_file and daily_file.filename else None
-                )
-                extra_imgs = [
-                    f.read() for f in extra_files if f and f.filename
-                ]
-                urls = urls_text.splitlines()
+                daily_b64 = None
+                if daily_file and daily_file.filename:
+                    daily_b64 = img_bytes_to_data_url(daily_file.read())
 
+                extra_b64_list: List[str] = []
+                for f in extra_files:
+                    if f and f.filename:
+                        extra_b64_list.append(img_bytes_to_data_url(f.read()))
+
+                urls: List[str] = []
+                for line in env_urls_raw.splitlines():
+                    u = line.strip()
+                    if u:
+                        urls.append(u)
+
+                summary_parts = []
+                if env_memo.strip():
+                    summary_parts.append("【環境メモ】")
+                    summary_parts.append(env_memo.strip())
+                if urls:
+                    summary_parts.append("【参考URL】")
+                    for u in urls:
+                        summary_parts.append(f"- {u}")
+
+                summary = "\n".join(summary_parts) if summary_parts else ""
+
+                ctx = {
+                    "symbol": env_symbol,
+                    "name": env_name,
+                    "summary": summary,
+                    "urls": urls,
+                    "memo": env_memo,
+                    "daily_image": daily_b64,
+                    "extra_images": extra_b64_list,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+
+                contexts[env_symbol] = ctx
                 try:
-                    summary = build_environment_summary(
-                        symbol=symbol,
-                        name=name,
-                        daily_bytes=daily_bytes,
-                        extra_imgs=extra_imgs,
-                        urls=urls,
-                        memo_text=env_memo,
-                    )
-
-                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    contexts[symbol] = {
-                        "name": name,
-                        "summary": summary,
-                        "updated_at": now_str,
-                    }
                     save_contexts(contexts)
-                    env_message = f"{symbol} の環境情報を更新しました。"
+                    env_message = f"{env_symbol} の環境情報を更新しました。"
                 except Exception as e:
-                    error = f"環境更新中にエラーが発生しました: {e}"
+                    error = f"環境情報の保存に失敗しました: {e}"
 
+    # GET または POST 後の画面表示
     return render_template(
         "index.html",
+        contexts=contexts,
         result=result,
         error=error,
         env_message=env_message,
-        registered_list=registered_list,
-        selected_code=selected_code or "",
+        judge_symbol=judge_symbol,
+        env_symbol=env_symbol,
     )
 
 
