@@ -7,12 +7,18 @@ from typing import Dict, Any, List, Optional
 from flask import Flask, render_template, request
 from openai import OpenAI
 
-# ★ここを自分の API キーに差し替えてね
-client = OpenAI(api_key="YOUR_OPENAI_API_KEY")
-
 app = Flask(__name__)
 
 CONTEXT_FILE = "contexts.json"
+
+# ---------- OpenAI クライアント設定 ----------
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+
+if not OPENAI_API_KEY:
+    # Render に環境変数を入れてない場合は起動時に落としておく
+    raise RuntimeError("OPENAI_API_KEY が環境変数に設定されていません。Render の Environment を確認してください。")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 # ---------- 環境データの保存 / 読み込み ----------
