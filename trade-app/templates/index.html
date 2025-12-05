@@ -1,240 +1,472 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <title>SFM トレード支援ツール（5分足＋板 → AI判定）</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      margin: 0;
-      padding: 0;
-      background: #f5f5f7;
-      color: #222;
-    }
-    .page {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 16px;
-    }
-    h1 {
-      font-size: 22px;
-      margin: 0 0 4px;
-    }
-    h2 {
-      font-size: 18px;
-      margin: 0 0 8px;
-    }
-    .card {
-      background: #fff;
-      border-radius: 12px;
-      padding: 16px;
-      margin-bottom: 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    }
-    .label {
-      font-size: 13px;
-      color: #555;
-      margin-bottom: 4px;
-      display: block;
-    }
-    input[type="text"],
-    textarea {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      font-size: 14px;
-    }
-    textarea {
-      min-height: 80px;
-      resize: vertical;
-    }
-    .input-row {
-      margin-bottom: 10px;
-    }
-    .btn-primary {
-      display: block;
-      width: 100%;
-      padding: 10px;
-      border-radius: 999px;
-      border: none;
-      background: #0066ff;
-      color: #fff;
-      font-size: 16px;
-      font-weight: 600;
-    }
-    .btn-primary:active {
-      opacity: 0.85;
-    }
-    .alert {
-      padding: 10px 12px;
-      border-radius: 8px;
-      margin-bottom: 12px;
-      font-size: 13px;
-    }
-    .alert-error {
-      background: #ffe5e5;
-      color: #b00020;
-    }
-    .alert-info {
-      background: #e5f2ff;
-      color: #004a9f;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 6px;
-      border-radius: 999px;
-      font-size: 11px;
-      background: #eee;
-      margin-left: 4px;
-    }
-    .symbol-list {
-      list-style: none;
-      padding-left: 0;
-      margin: 6px 0 0;
-      font-size: 13px;
-    }
-    .symbol-list li {
-      padding: 2px 0;
-    }
-    .result-box {
-      white-space: pre-wrap;
-      font-size: 14px;
-      line-height: 1.5;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <title>SFM トレード支援ツール（5分足＋板 → AI判定）</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style>
+        :root {
+            --bg-main: #f5f5f7;
+            --bg-card: #ffffff;
+            --accent: #007aff;
+            --accent-soft: #e5f1ff;
+            --danger: #ff3b30;
+            --text-main: #222;
+            --text-sub: #555;
+            --border-soft: #e0e0e0;
+            --radius-card: 16px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+            background: var(--bg-main);
+            color: var(--text-main);
+        }
+
+        .page {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+
+        header {
+            margin-bottom: 16px;
+        }
+
+        header h1 {
+            font-size: 1.4rem;
+            margin: 0 0 4px;
+            line-height: 1.4;
+        }
+
+        header p {
+            margin: 0;
+            font-size: 0.88rem;
+            color: var(--text-sub);
+        }
+
+        .badge {
+            font-size: 0.8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            background: #fff3cd;
+            color: #856404;
+            margin-bottom: 8px;
+        }
+
+        .badge::before {
+            content: "📈";
+        }
+
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius-card);
+            padding: 16px 16px 18px;
+            margin-bottom: 14px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+        }
+
+        .card h2 {
+            font-size: 1.05rem;
+            margin: 0 0 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card h2 span {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            font-weight: 500;
+        }
+
+        .card small {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            margin-bottom: 8px;
+        }
+
+        .field {
+            margin-bottom: 10px;
+        }
+
+        .field label {
+            display: block;
+            font-size: 0.85rem;
+            margin-bottom: 4px;
+        }
+
+        .field label span.req {
+            color: var(--danger);
+            font-size: 0.8rem;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 9px 10px;
+            font-size: 0.9rem;
+            border-radius: 10px;
+            border: 1px solid var(--border-soft);
+            outline: none;
+            background: #fcfcff;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px rgba(0,122,255,0.15);
+        }
+
+        textarea {
+            min-height: 72px;
+            resize: vertical;
+        }
+
+        .file-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-row input[type="file"] {
+            flex: 1;
+            font-size: 0.85rem;
+        }
+
+        .hint {
+            font-size: 0.78rem;
+            color: var(--text-sub);
+            margin-top: 2px;
+        }
+
+        .btn-main {
+            width: 100%;
+            border: none;
+            outline: none;
+            border-radius: 999px;
+            background: var(--accent);
+            color: #fff;
+            padding: 11px 16px;
+            font-size: 1rem;
+            font-weight: 600;
+            margin-top: 6px;
+        }
+
+        .btn-main:active {
+            opacity: 0.85;
+            transform: translateY(1px);
+        }
+
+        .btn-sub {
+            border: none;
+            outline: none;
+            border-radius: 999px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            background: #f1f1f4;
+            color: var(--text-sub);
+        }
+
+        .btn-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            padding: 5px 11px;
+            border-radius: 999px;
+            border: 1px solid #d0d0d4;
+            background: #fff;
+        }
+
+        .alert {
+            border-radius: 12px;
+            padding: 10px 12px;
+            font-size: 0.85rem;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .alert-error {
+            background: #ffecec;
+            border: 1px solid #ffb3af;
+            color: #b3261e;
+        }
+
+        .alert-success {
+            background: #e7f6e7;
+            border: 1px solid #a2dba2;
+            color: #216e39;
+        }
+
+        .result-card {
+            margin-top: 10px;
+            padding: 11px 12px;
+            border-radius: 12px;
+            background: var(--accent-soft);
+            font-size: 0.88rem;
+        }
+
+        .result-card strong {
+            display: inline-block;
+            margin-bottom: 4px;
+        }
+
+        .env-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .env-chip {
+            padding: 5px 10px;
+            border-radius: 999px;
+            border: 1px solid #dde1ee;
+            background: #ffffff;
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .env-chip span.code {
+            font-weight: 600;
+        }
+
+        .env-chip span.name {
+            color: var(--text-sub);
+        }
+
+        .env-empty {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+            margin-top: 4px;
+        }
+
+        .toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .toggle-row-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .toggle-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        /* スマホ向け微調整 */
+        @media (max-width: 600px) {
+            .page {
+                padding: 12px;
+            }
+
+            header h1 {
+                font-size: 1.18rem;
+            }
+
+            .card {
+                padding: 14px 13px 16px;
+            }
+        }
+    </style>
 </head>
 <body>
 <div class="page">
 
-  <h1>📈 SFM トレード支援ツール（5分足＋板 → AI判定）</h1>
-  <p style="font-size:13px; margin-top:4px;">
-    上部で登録した銘柄の「日足・材料などの環境」を保存しておくと、
-    5分足＋板で判定するたびに、その環境情報も自動で考慮してくれます。
-  </p>
+    <header>
+        <div class="badge">SFM 短期トレード支援ツール</div>
+        <h1>📈 SFM トレード支援ツール（5分足＋板 → AI判定）</h1>
+        <p>
+            上部で登録した銘柄の「日足・材料などの環境」を保存しておくと、<br>
+            5分足＋板で判定するたびに、その環境情報も自動で考慮してくれます。
+        </p>
+    </header>
 
-  {% if error %}
-    <div class="alert alert-error">{{ error }}</div>
-  {% endif %}
-  {% if env_message %}
-    <div class="alert alert-info">{{ env_message }}</div>
-  {% endif %}
-
-  <!-- 登録済み銘柄 -->
-  <div class="card">
-    <h2>✅ 登録済み銘柄</h2>
-    {% if contexts %}
-      <ul class="symbol-list">
-        {% for sym, ctx in contexts.items() %}
-          <li>
-            <strong>{{ sym }}</strong>
-            {% if ctx.name %}（{{ ctx.name }}）{% endif %}
-            {% if ctx.summary %}
-              <span class="badge">環境メモあり</span>
-            {% endif %}
-          </li>
+    {# ---- エラーメッセージ / 成功メッセージ ---- #}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, msg in messages %}
+          <div class="alert alert-{{ 'error' if category == 'error' else 'success' }}">{{ msg }}</div>
         {% endfor %}
-      </ul>
-      <p style="font-size:12px; color:#666; margin-top:6px;">
-        ※ 登録済みの銘柄コードを下のフォームに入力すると、その銘柄の環境を加味して判定します。
-      </p>
-    {% else %}
-      <p style="font-size:13px; color:#666;">まだ登録された銘柄はありません。下のフォームから登録してください。</p>
+      {% endif %}
+    {% endwith %}
+
+    {% if error_message %}
+      <div class="alert alert-error">{{ error_message }}</div>
     {% endif %}
-  </div>
 
-  <!-- ① 5分足＋板から短期アクションを判定 -->
-  <div class="card">
-    <h2>① 5分足＋板から短期アクションを判定</h2>
-
-    <form method="post" enctype="multipart/form-data">
-      <input type="hidden" name="form_type" value="judge">
-
-      <div class="input-row">
-        <label class="label">銘柄コード（判定する対象）</label>
-        <input type="text" name="judge_symbol" placeholder="例: 9434" value="{{ judge_symbol }}">
-      </div>
-
-      <div class="input-row">
-        <label class="label">5分足チャート画像</label>
-        <input type="file" name="chart_image" accept="image/*">
-        <div style="font-size:11px; color:#777; margin-top:2px;">
-          5分足チャートのスクショをアップロードしてください。
+    {# ---- 登録済み銘柄カード ---- #}
+    <section class="card">
+        <div class="toggle-row">
+            <div class="toggle-row-left">
+                <input type="checkbox" id="show_env_toggle" checked disabled>
+                <label for="show_env_toggle" class="toggle-label">登録済み銘柄</label>
+            </div>
+            <button type="button" class="btn-pill" onclick="location.reload()">
+                🔄 再読み込み
+            </button>
         </div>
-      </div>
+        <small>タップすると上の入力に銘柄コードが入ります（※画面だけで完結・サーバーには何も送信しません）。</small>
 
-      <div class="input-row">
-        <label class="label">気配値（板）画像</label>
-        <input type="file" name="board_image" accept="image/*">
-        <div style="font-size:11px; color:#777; margin-top:2px;">
-          板のスクショをアップロードしてください。
-        </div>
-      </div>
+        {% if registered_envs %}
+            <div class="env-list">
+                {% for code, env in registered_envs.items() %}
+                    <button type="button"
+                            class="env-chip"
+                            data-code="{{ code }}"
+                            data-name="{{ env.get('name','') }}">
+                        <span class="code">{{ code }}</span>
+                        {% if env.get('name') %}
+                            <span class="name">{{ env.get('name') }}</span>
+                        {% endif %}
+                    </button>
+                {% endfor %}
+            </div>
+        {% else %}
+            <div class="env-empty">まだ登録された銘柄はありません。下のフォームから登録してください。</div>
+        {% endif %}
+    </section>
 
-      <div class="input-row">
-        <label class="label">補足メモ（任意）</label>
-        <textarea name="judge_memo"
-          placeholder="例: 自分のエントリー価格や、直近のニュースなどメモしておきたいことがあれば。"></textarea>
-      </div>
+    {# ---- ① 短期アクション判定 ---- #}
+    <section class="card">
+        <h2>① 5分足＋板から短期アクションを判定 <span>（推奨：まずはこちら）</span></h2>
+        <small>銘柄コードと 5分足チャート・板のスクショをアップして AI に今の一手を聞きます。</small>
 
-      <button type="submit" class="btn-primary">AI に判定してもらう</button>
-    </form>
+        <form action="/judge" method="POST" enctype="multipart/form-data">
+            <div class="field">
+                <label for="stock_code">銘柄コード（判定する対象） <span class="req">必須</span></label>
+                <input type="text"
+                       id="stock_code"
+                       name="stock_code"
+                       inputmode="numeric"
+                       pattern="\d*"
+                       placeholder="例: 9984"
+                       value="{{ form_values.stock_code if form_values is defined else '' }}"
+                       required>
+            </div>
 
-    {% if result %}
-      <hr style="margin:16px 0;">
-      <h3 style="font-size:16px; margin:0 0 6px;">📊 判定結果（{{ result.symbol }}）</h3>
-      <p style="font-size:13px; color:#555; margin:0 0 8px;">
-        AI によるざっくり解説です。最終判断はご自身でお願いします。
-      </p>
-      <div class="result-box">{{ result.full_text }}</div>
-    {% endif %}
-  </div>
+            <div class="field">
+                <label for="chart_image">5分足チャート画像 <span class="req">必須</span></label>
+                <div class="file-row">
+                    <input type="file"
+                           id="chart_image"
+                           name="chart_image"
+                           accept="image/*"
+                           required>
+                </div>
+                <div class="hint">5分足チャートのスクショをアップロードしてください。</div>
+            </div>
 
-  <!-- ② 日足・材料などの環境情報を登録（銘柄ごとに保存） -->
-  <div class="card">
-    <h2>② 日足・材料などの環境情報を登録（銘柄ごとに保存）</h2>
+            <div class="field">
+                <label for="orderbook_image">気配値（板）画像 <span class="req">必須</span></label>
+                <div class="file-row">
+                    <input type="file"
+                           id="orderbook_image"
+                           name="orderbook_image"
+                           accept="image/*"
+                           required>
+                </div>
+                <div class="hint">板のスクショをアップロードしてください。</div>
+            </div>
 
-    <form method="post" enctype="multipart/form-data">
-      <input type="hidden" name="form_type" value="env">
+            <div class="field">
+                <label for="extra_note">補足メモ（任意）</label>
+                <textarea id="extra_note"
+                          name="extra_note"
+                          placeholder="例: 自分のエントリー価格や、直近のニュースなどメモしておきたいことがあれば。">{{ form_values.extra_note if form_values is defined else '' }}</textarea>
+            </div>
 
-      <div class="input-row">
-        <label class="label">銘柄コード（必須）</label>
-        <input type="text" name="env_symbol" placeholder="例: 9984" value="{{ env_symbol }}">
-      </div>
+            <button type="submit" class="btn-main">AI に判定してもらう</button>
+        </form>
 
-      <div class="input-row">
-        <label class="label">銘柄名（任意・メモ代わり）</label>
-        <input type="text" name="env_name" placeholder="例: ソフトバンクグループ">
-      </div>
+        {% if judge_result %}
+            <div class="result-card">
+                {{ judge_result|safe }}
+            </div>
+        {% endif %}
+    </section>
 
-      <div class="input-row">
-        <label class="label">日足チャート画像（任意）</label>
-        <input type="file" name="daily_image" accept="image/*">
-      </div>
+    {# ---- ② 環境情報の登録 ---- #}
+    <section class="card">
+        <h2>② 日足・材料などの環境情報を登録（銘柄ごとに保存）</h2>
+        <small>中期トレンド・材料・ニュース等、「その銘柄の背景」をメモしておくエリアです。</small>
 
-      <div class="input-row">
-        <label class="label">追加の参考画像（任意・複数可）</label>
-        <input type="file" name="extra_images" accept="image/*" multiple>
-      </div>
+        <form action="/save_environment" method="POST">
+            <div class="field">
+                <label for="env_stock_code">銘柄コード <span class="req">必須</span></label>
+                <input type="text"
+                       id="env_stock_code"
+                       name="env_stock_code"
+                       inputmode="numeric"
+                       pattern="\d*"
+                       placeholder="例: 9984"
+                       value="{{ env_form_values.env_stock_code if env_form_values is defined else '' }}"
+                       required>
+            </div>
 
-      <div class="input-row">
-        <label class="label">参考にしてほしいURL（任意・複数行OK）</label>
-        <textarea name="env_urls"
-          placeholder="1行に1つずつURLを入力&#10;例: https://www.example.com/ir/..."></textarea>
-      </div>
+            <div class="field">
+                <label for="env_stock_name">銘柄名（任意・メモ代わり）</label>
+                <input type="text"
+                       id="env_stock_name"
+                       name="env_stock_name"
+                       placeholder="例: ソフトバンクグループ"
+                       value="{{ env_form_values.env_stock_name if env_form_values is defined else '' }}">
+            </div>
 
-      <div class="input-row">
-        <label class="label">環境メモ（任意）</label>
-        <textarea name="env_memo"
-          placeholder="例: 中期は上昇トレンドだが直近決算で売られて調整中　など"></textarea>
-      </div>
+            <div class="field">
+                <label for="env_urls">参考にしてほしいURL（任意・複数行OK）</label>
+                <textarea id="env_urls"
+                          name="env_urls"
+                          placeholder="1行につき1つURLを入力&#10;例: https://www.example.com/ir/...">{{ env_form_values.env_urls if env_form_values is defined else '' }}</textarea>
+                <div class="hint">IR資料やニュース記事など。ツール側で中身を取得して要約に使います。</div>
+            </div>
 
-      <button type="submit" class="btn-primary">この銘柄の環境を更新する</button>
-    </form>
-  </div>
+            <div class="field">
+                <label for="env_memo">環境メモ（任意）</label>
+                <textarea id="env_memo"
+                          name="env_memo"
+                          placeholder="例: 日足は75日線上で上昇トレンド・好材料あり、決算は〇月予定…など。">{{ env_form_values.env_memo if env_form_values is defined else '' }}</textarea>
+            </div>
+
+            <button type="submit" class="btn-sub">この銘柄の環境を保存する</button>
+        </form>
+    </section>
 
 </div>
+
+<script>
+    // 登録済み銘柄チップをタップしたとき、上の入力欄に反映（フロントだけ・POSTしない）
+    document.addEventListener('DOMContentLoaded', () => {
+        const chips = document.querySelectorAll('.env-chip');
+        const codeInput = document.getElementById('stock_code');
+        const envCodeInput = document.getElementById('env_stock_code');
+
+        chips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                const code = chip.dataset.code || '';
+                if (codeInput) codeInput.value = code;
+                if (envCodeInput) envCodeInput.value = code;
+            });
+        });
+    });
+</script>
 </body>
 </html>
