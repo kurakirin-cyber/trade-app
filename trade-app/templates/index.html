@@ -215,11 +215,23 @@
             border-radius: 12px;
             background: var(--accent-soft);
             font-size: 0.88rem;
+            line-height: 1.6;
+        }
+
+        .result-card h3 {
+            margin-top: 0;
+            color: var(--accent);
         }
 
         .result-card strong {
             display: inline-block;
             margin-bottom: 4px;
+        }
+        
+        /* AI出力用の簡易スタイル */
+        .result-card ul {
+            padding-left: 20px;
+            margin: 8px 0;
         }
 
         .env-list {
@@ -239,6 +251,11 @@
             display: inline-flex;
             align-items: center;
             gap: 4px;
+            transition: background 0.2s;
+        }
+        
+        .env-chip:hover {
+            background: #f0f0f5;
         }
 
         .env-chip span.code {
@@ -318,13 +335,13 @@
         <div class="toggle-row">
             <div class="toggle-row-left">
                 <input type="checkbox" id="show_env_toggle" checked disabled>
-                <label for="show_env_toggle" class="toggle-label">登録済み銘柄</label>
+                <label for="show_env_toggle" class="toggle-label">登録済み銘柄（一時保存中）</label>
             </div>
             <button type="button" class="btn-pill" onclick="location.reload()">
                 🔄 再読み込み
             </button>
         </div>
-        <small>タップすると上の入力に銘柄コードが入ります（※画面だけで完結・サーバーには何も送信しません）。</small>
+        <small>タップすると下の入力に銘柄コードが入ります。※サーバー再起動で消えるから注意な。</small>
 
         {% if registered_envs %}
             <div class="env-list">
