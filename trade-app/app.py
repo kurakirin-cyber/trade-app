@@ -1,248 +1,246 @@
-import base64
-import json
 import os
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+import json
+import base64
+from flask import Flask, render_template, request, redirect, url_for
 
-from flask import Flask, render_template, request
 from openai import OpenAI
+
+# ------------ 基本設定 ------------
 
 app = Flask(__name__)
 
-CONTEXT_FILE = "contexts.json"
-
-# ---------- OpenAI クライアント設定 ----------
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-
-if not OPENAI_API_KEY:
-    # Render に環境変数を入れてない場合は起動時に落としておく
-    raise RuntimeError("OPENAI_API_KEY が環境変数に設定されていません。Render の Environment を確認してください。")
-
+# Render の Environment Variables に設定したキーを読む
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY".lower())
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+# 銘柄ごとの環境情報を保存するファイル
+ENV_FILE = "stock_env.json"
 
-# ---------- 環境データの保存 / 読み込み ----------
 
-def load_contexts() -> Dict[str, Any]:
-    """contexts.json から銘柄ごとの環境データを読む"""
-    if not os.path.exists(CONTEXT_FILE):
+# ------------ ユーティリティ ------------
+
+def load_env_data():
+    """保存済みの銘柄環境データを読み込む"""
+    if not os.path.exists(ENV_FILE):
         return {}
     try:
-        with open(CONTEXT_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        with open(ENV_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
+        # 壊れていたらリセット
         return {}
 
 
-def save_contexts(contexts: Dict[str, Any]) -> None:
-    """銘柄ごとの環境データを contexts.json に保存"""
-    with open(CONTEXT_FILE, "w", encoding="utf-8") as f:
-        json.dump(contexts, f, ensure_ascii=False, indent=2)
+def save_env_data(data):
+    """銘柄環境データを書き出す"""
+    with open(ENV_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def img_bytes_to_data_url(img_bytes: bytes) -> str:
-    """画像バイト列 → data URL"""
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
+def file_to_data_url(file_storage):
+    """Flask の file オブジェクトを data URL (base64) に変換"""
+    if not file_storage or file_storage.filename == "":
+        return None
+
+    data = file_storage.read()
+    if not data:
+        return None
+
+    mime = file_storage.mimetype or "image/png"
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
 
 
-# ---------- OpenAI での判定ロジック ----------
-
-def call_gpt_for_intraday(
-    symbol: str,
-    env_summary: Optional[str],
-    chart_img_bytes: bytes,
-    board_img_bytes: bytes,
-    memo_text: str,
-) -> Dict[str, Any]:
+def call_openai_for_trade(prompt_text, chart_data_url=None, board_data_url=None):
     """
-    5分足 + 板画像 + メモ + （あれば）環境サマリを投げて、アクション案を返す
+    OpenAI Responses API を叩いて短期アクションを判定してもらう
+    ※ type は input_text / input_image を使う
     """
-    system_msg = (
-        "あなたは日本株の短期トレードを手伝うアシスタントです。"
-        "与えられた 5 分足チャートと板のスクショから、"
-        "直近 1〜2 時間程度のエントリー／利確／損切りの方針をわかりやすく提案してください。"
-        "数値は『だいたいの目安』でよいですが、レンジを具体的に示してください。"
-    )
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY が設定されていません。Render の Environment Variables を確認してください。")
 
-    user_text_parts = [
-        f"銘柄コード: {symbol}",
+    content_parts = [
+        {
+            "type": "input_text",
+            "text": prompt_text,
+        }
     ]
 
-    if env_summary:
-        user_text_parts.append("【この銘柄の環境メモ】")
-        user_text_parts.append(env_summary)
+    if chart_data_url:
+        content_parts.append(
+            {
+                "type": "input_image",
+                "image_url": {"url": chart_data_url},
+            }
+        )
 
-    if memo_text.strip():
-        user_text_parts.append("【トレーダーからの補足メモ】")
-        user_text_parts.append(memo_text.strip())
+    if board_data_url:
+        content_parts.append(
+            {
+                "type": "input_image",
+                "image_url": {"url": board_data_url},
+            }
+        )
 
-    user_text_parts.append(
-        "これらを踏まえて、以下の形式で日本語で出力してください。\n\n"
-        "1. 現在の状況の要約（テクニカル + 板の雰囲気）\n"
-        "2. 短期アクション\n"
-        "   - 今の推奨アクション（例: 見送り / 押し目買い / 逆張り買い / 利確売り など）\n"
-        "   - もし『買い』なら：狙いたい買いレンジ（〇〇〜〇〇円）\n"
-        "   - もし『売り』なら：利確を意識したい売りレンジ（〇〇〜〇〇円）\n"
-        "   - 損切りを検討すべきラインの目安\n"
-        "3. 上記アクションを選んだ理由を、チャートと板のどの点からそう判断したのか具体的に\n"
-        "4. 注意点・無理して入らない方がよいパターンがあればその条件\n"
-    )
-
-    user_text = "\n".join(user_text_parts)
-
-    chart_data_url = img_bytes_to_data_url(chart_img_bytes)
-    board_data_url = img_bytes_to_data_url(board_img_bytes)
-
-    resp = client.responses.create(
-        model="gpt-4o-mini",
+    # 新しい Responses API 形式
+    response = client.responses.create(
+        model="gpt-4.1-mini",
         input=[
-            {"role": "system", "content": [{"type": "text", "text": system_msg}]},
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {"type": "input_image", "image_url": {"url": chart_data_url}},
-                    {"type": "input_image", "image_url": {"url": board_data_url}},
-                ],
-            },
+                "content": content_parts,
+            }
         ],
     )
 
-    ai_text = resp.output[0].content[0].text.value
+    # 返却テキストを取り出し
+    try:
+        ai_text = response.output[0].content[0].text
+    except Exception:
+        ai_text = str(response)
 
-    # ここではシンプルに「アクション種別」だけ軽く抽出しておく
-    action = "様子見"
-    action_lower = ai_text.lower()
-    if "買" in ai_text and "売" not in ai_text:
-        action = "買い検討"
-    elif "利確" in ai_text or "手仕舞い" in ai_text or "売り" in ai_text:
-        action = "売り検討"
-
-    return {
-        "symbol": symbol,
-        "action": action,
-        "full_text": ai_text,
-    }
+    return ai_text
 
 
-# ---------- Flask ルート ----------
+# ------------ ルーティング ------------
 
-@app.route("/", methods=["GET", "POST"])
+@app.route("/", methods=["GET"])
 def index():
-    contexts = load_contexts()
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    env_message: Optional[str] = None
+    env_data = load_env_data()
+    selected_code = request.args.get("code")
 
-    judge_symbol = ""
-    env_symbol = ""
+    selected_env = env_data.get(selected_code) if selected_code else None
 
-    if request.method == "POST":
-        form_type = request.form.get("form_type")  # ★どのフォームかを判定
-
-        # --- ① 判定フォーム ---
-        if form_type == "judge":
-            judge_symbol = request.form.get("judge_symbol", "").strip()
-
-            if not judge_symbol:
-                error = "銘柄コード（判定対象）を入力してください。"
-            else:
-                chart_file = request.files.get("chart_image")
-                board_file = request.files.get("board_image")
-                memo_text = request.form.get("judge_memo", "")
-
-                if not chart_file or chart_file.filename == "":
-                    error = "5分足チャート画像を選択してください。"
-                elif not board_file or board_file.filename == "":
-                    error = "気配値（板）の画像を選択してください。"
-                else:
-                    try:
-                        chart_bytes = chart_file.read()
-                        board_bytes = board_file.read()
-
-                        env_ctx = contexts.get(judge_symbol)
-                        env_summary = env_ctx.get("summary") if isinstance(env_ctx, dict) else None
-
-                        result = call_gpt_for_intraday(
-                            symbol=judge_symbol,
-                            env_summary=env_summary,
-                            chart_img_bytes=chart_bytes,
-                            board_img_bytes=board_bytes,
-                            memo_text=memo_text,
-                        )
-                    except Exception as e:
-                        error = f"判定中にエラーが発生しました: {e}"
-
-        # --- ② 環境登録フォーム ---
-        elif form_type == "env":
-            env_symbol = request.form.get("env_symbol", "").strip()
-            env_name = request.form.get("env_name", "").strip()
-            env_urls_raw = request.form.get("env_urls", "")
-            env_memo = request.form.get("env_memo", "")
-
-            if not env_symbol:
-                error = "銘柄コード（環境登録用）は必須です。"
-            else:
-                daily_file = request.files.get("daily_image")
-                extra_files = request.files.getlist("extra_images")
-
-                daily_b64 = None
-                if daily_file and daily_file.filename:
-                    daily_b64 = img_bytes_to_data_url(daily_file.read())
-
-                extra_b64_list: List[str] = []
-                for f in extra_files:
-                    if f and f.filename:
-                        extra_b64_list.append(img_bytes_to_data_url(f.read()))
-
-                urls: List[str] = []
-                for line in env_urls_raw.splitlines():
-                    u = line.strip()
-                    if u:
-                        urls.append(u)
-
-                summary_parts = []
-                if env_memo.strip():
-                    summary_parts.append("【環境メモ】")
-                    summary_parts.append(env_memo.strip())
-                if urls:
-                    summary_parts.append("【参考URL】")
-                    for u in urls:
-                        summary_parts.append(f"- {u}")
-
-                summary = "\n".join(summary_parts) if summary_parts else ""
-
-                ctx = {
-                    "symbol": env_symbol,
-                    "name": env_name,
-                    "summary": summary,
-                    "urls": urls,
-                    "memo": env_memo,
-                    "daily_image": daily_b64,
-                    "extra_images": extra_b64_list,
-                    "updated_at": datetime.utcnow().isoformat(),
-                }
-
-                contexts[env_symbol] = ctx
-                try:
-                    save_contexts(contexts)
-                    env_message = f"{env_symbol} の環境情報を更新しました。"
-                except Exception as e:
-                    error = f"環境情報の保存に失敗しました: {e}"
-
-    # GET または POST 後の画面表示
     return render_template(
         "index.html",
-        contexts=contexts,
-        result=result,
-        error=error,
-        env_message=env_message,
-        judge_symbol=judge_symbol,
-        env_symbol=env_symbol,
+        env_data=env_data,
+        selected_code=selected_code,
+        selected_env=selected_env,
+        result_text=None,
+        error_message=None,
     )
 
 
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    env_data = load_env_data()
+
+    code = (request.form.get("code") or "").strip()
+    memo = (request.form.get("memo") or "").strip()
+
+    chart_file = request.files.get("chart_image")
+    board_file = request.files.get("board_image")
+
+    chart_data_url = file_to_data_url(chart_file)
+    board_data_url = file_to_data_url(board_file)
+
+    selected_env = env_data.get(code)
+
+    if not code:
+        error_message = "銘柄コードを入力してください。"
+        return render_template(
+            "index.html",
+            env_data=env_data,
+            selected_code=None,
+            selected_env=None,
+            result_text=None,
+            error_message=error_message,
+        )
+
+    # プロンプトを作成（環境情報があれば一緒に渡す）
+    env_text = ""
+    if selected_env:
+        env_text = f"""
+【この銘柄の環境情報】
+銘柄コード: {code}
+銘柄名: {selected_env.get('name', '')}
+参考URL:
+{selected_env.get('urls', '')}
+
+環境メモ:
+{selected_env.get('env_memo', '')}
+"""
+
+    prompt_text = f"""
+あなたは日本株のデイトレード・スキャルピングをサポートするAIトレーダーです。
+5分足チャート画像と板のスクショ、そしてメモをもとに、
+今から「ごく短期（〜数十分）」でどうアクションするべきかを判断してください。
+
+{env_text}
+
+【短期トレード用メモ】
+{memo}
+
+出力は日本語で、以下の項目を必ず含めてください：
+
+1. 現在の状況の要約（トレンド・出来高・板の雰囲気など）
+2. 推奨アクション（例：様子見 / 成行で買い / 指値で買い / 利確の売り / 損切り など）
+3. もし「買い」または「売り」の場合は、
+   - おおよそのエントリー価格の目安（◯◯円〜◯◯円のレンジ）
+   - 目標価格・利確ラインの目安
+   - 損切りラインの目安
+4. 判断の理由（できるだけ具体的に。チャート・板のどの部分を見たのかなど）
+5. 注意点・想定外の値動きが出た時の対応案
+
+こちらからは画像とテキストのみ渡すので、足りない情報は一般的な日本株の短期トレードの前提で補ってください。
+"""
+
+    try:
+        ai_text = call_openai_for_trade(
+            prompt_text=prompt_text,
+            chart_data_url=chart_data_url,
+            board_data_url=board_data_url,
+        )
+        error_message = None
+    except Exception as e:
+        ai_text = None
+        error_message = f"判定中にエラーが発生しました: {e}"
+
+    return render_template(
+        "index.html",
+        env_data=env_data,
+        selected_code=code,
+        selected_env=selected_env,
+        result_text=ai_text,
+        error_message=error_message,
+    )
+
+
+@app.route("/save_env", methods=["POST"])
+def save_env():
+    env_data = load_env_data()
+
+    code = (request.form.get("env_code") or "").strip()
+    name = (request.form.get("env_name") or "").strip()
+    urls = (request.form.get("env_urls") or "").strip()
+    env_memo = (request.form.get("env_memo") or "").strip()
+
+    if not code:
+        # コードは必須
+        error_message = "銘柄コード（環境登録用）は必須です。"
+    else:
+        env_data[code] = {
+            "name": name,
+            "urls": urls,
+            "env_memo": env_memo,
+        }
+        save_env_data(env_data)
+        error_message = None
+
+    selected_env = env_data.get(code) if code else None
+
+    return render_template(
+        "index.html",
+        env_data=env_data,
+        selected_code=code,
+        selected_env=selected_env,
+        result_text=None,
+        error_message=error_message,
+    )
+
+
+# ------------ Render 用エントリーポイント ------------
+
 if __name__ == "__main__":
+    # ローカル開発用
     app.run(host="0.0.0.0", port=5000, debug=True)
