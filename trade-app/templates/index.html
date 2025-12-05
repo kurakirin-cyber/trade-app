@@ -5,19 +5,16 @@
   <title>SFM トレード支援ツール（5分足＋板 → AI判定）</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
     body {
-      margin: 0;
-      padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
         "Segoe UI", sans-serif;
       background: #f5f5f7;
-      color: #222;
+      margin: 0;
+      padding: 0;
     }
-    .page {
-      max-width: 960px;
+    .wrapper {
+      max-width: 900px;
       margin: 0 auto;
       padding: 16px;
     }
@@ -25,379 +22,269 @@
       font-size: 20px;
       margin: 0 0 8px;
     }
-    h2 {
-      font-size: 18px;
-      margin: 0 0 8px;
+    .sub {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.5;
+      margin-bottom: 8px;
     }
-    h3 {
-      font-size: 16px;
-      margin: 0 0 6px;
+    .alert {
+      padding: 10px 12px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      font-size: 13px;
     }
-    p {
-      margin: 4px 0;
-      line-height: 1.6;
+    .alert-error {
+      background: #ffe4e4;
+      color: #b00020;
+    }
+    .alert-ok {
+      background: #e0f4ff;
+      color: #00509e;
     }
     .card {
       background: #fff;
-      border-radius: 12px;
-      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
-      padding: 14px 16px;
-      margin-bottom: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+      padding: 14px 16px 16px;
+      margin-bottom: 14px;
     }
-    .card-header {
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 6px;
       display: flex;
       align-items: center;
       gap: 6px;
-      margin-bottom: 6px;
-      font-weight: 600;
-      font-size: 15px;
     }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
-      background: #eef2ff;
-      color: #3730a3;
-      margin-left: 6px;
+    .card-title span.idx {
+      font-weight: 700;
+      color: #ff3366;
     }
-    .small {
-      font-size: 12px;
-      color: #666;
-    }
-
-    .label {
+    label {
       font-size: 13px;
-      font-weight: 600;
-      margin: 10px 0 4px;
+      display: block;
+      margin: 8px 0 4px;
     }
     input[type="text"],
     textarea {
       width: 100%;
       padding: 8px 10px;
-      border-radius: 8px;
-      border: 1px solid #d1d5db;
-      font-size: 14px;
-      outline: none;
-    }
-    input[type="text"]:focus,
-    textarea:focus {
-      border-color: #2563eb;
-      box-shadow: 0 0 0 1px #2563eb33;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      font-size: 13px;
     }
     textarea {
+      min-height: 72px;
       resize: vertical;
-      min-height: 60px;
     }
-    .file-input {
-      font-size: 13px;
+    .hint {
+      font-size: 11px;
+      color: #777;
+      margin-top: 2px;
+    }
+    .file-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
       margin-top: 4px;
     }
-
     .btn {
       display: inline-flex;
-      align-items: center;
       justify-content: center;
-      gap: 4px;
-      padding: 8px 14px;
+      align-items: center;
+      padding: 10px 16px;
       border-radius: 999px;
       border: none;
       font-size: 14px;
       font-weight: 600;
       cursor: pointer;
-      background: #2563eb;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .btn-main {
+      background: #007aff;
       color: #fff;
-      margin-top: 12px;
+      width: 100%;
     }
-    .btn.secondary {
-      background: #e5e7eb;
-      color: #111827;
-    }
-    .btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-
-    .symbol-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-top: 8px;
+    .btn-sub {
+      background: #eee;
+      color: #333;
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: 999px;
     }
     .symbol-pill {
       display: inline-flex;
       align-items: center;
-      padding: 4px 10px;
+      padding: 5px 9px;
       border-radius: 999px;
-      background: #e5e7eb;
+      background: #f1f3f5;
       font-size: 12px;
+      margin: 3px 4px 0 0;
       text-decoration: none;
-      color: #111827;
-      border: 1px solid transparent;
+      color: #333;
     }
-    .symbol-pill.active {
-      background: #2563eb;
-      color: #fff;
-    }
-
-    .result-box {
-      margin-top: 10px;
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: #f1f5f9;
-      font-size: 13px;
-    }
-    .result-row {
-      margin: 4px 0;
-    }
-
-    .chip {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
+    .symbol-pill span.code {
       font-weight: 600;
+      margin-right: 4px;
     }
-    .chip-buy {
-      background: #dcfce7;
-      color: #166534;
-    }
-    .chip-sell {
-      background: #fee2e2;
-      color: #991b1b;
-    }
-    .chip-hold {
-      background: #e0f2fe;
-      color: #075985;
-    }
-
-    .error {
-      padding: 8px 10px;
+    .result-box {
       border-radius: 8px;
-      background: #fee2e2;
-      color: #991b1b;
+      padding: 10px 12px;
+      background: #f0fbf2;
+      border: 1px solid #a8e4b8;
       font-size: 13px;
-      margin-bottom: 10px;
+      margin-top: 8px;
     }
-
-    @media (min-width: 720px) {
-      .grid-2 {
-        display: grid;
-        grid-template-columns: 1.1fr 1.1fr;
-        gap: 16px;
-      }
+    .result-box strong {
+      font-size: 15px;
     }
   </style>
 </head>
 <body>
-  <div class="page">
+  <div class="wrapper">
     <h1>📈 SFM トレード支援ツール（5分足＋板 → AI判定）</h1>
-    <p class="small">
-      上部で登録した銘柄の環境（日足・材料など）を保存しておくと、<br />
+    <div class="sub">
+      上で登録した銘柄の「日足・材料などの環境情報」を保存しておくと、<br />
       5分足＋板で判定するたびに、その環境情報も自動で考慮してくれます。
-    </p>
-
-    <!-- エラー表示 -->
-    {% if error %}
-    <div class="error">
-      {{ error }}
     </div>
+
+    {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+    {% if env_message %}
+    <div class="alert alert-ok">{{ env_message }}</div>
     {% endif %}
 
-    <!-- 登録済み銘柄一覧 -->
+    <!-- 登録済み銘柄 -->
     <div class="card">
-      <div class="card-header">
+      <div class="card-title">
         ✅ 登録済み銘柄
-        <span class="badge">タップで切り替え</span>
       </div>
-      {% if envs and envs|length > 0 %}
-        <div class="symbol-list">
-          {% for code, info in envs.items() %}
-            <a
-              class="symbol-pill {% if selected_code == code %}active{% endif %}"
-              href="/?code={{ code }}"
-            >
-              {{ code }}{% if info.name %} {{ info.name }}{% endif %}
-            </a>
+      {% if registered_list %}
+        <div class="hint">銘柄をタップすると、その銘柄コードがフォームに入ります。</div>
+        <div>
+          {% for s in registered_list %}
+          <a class="symbol-pill" href="/?code={{ s.code }}">
+            <span class="code">{{ s.code }}</span>
+            <span>{{ s.name }}</span>
+          </a>
           {% endfor %}
         </div>
-        {% if not selected_code %}
-          <p class="small" style="margin-top:8px;">
-            ※ 銘柄をタップすると、その銘柄の環境要約が下に表示されます。
-          </p>
-        {% endif %}
       {% else %}
-        <p class="small">まだ登録された銘柄はありません。下のフォームから登録してください。</p>
+        <div class="hint">まだ登録された銘柄はありません。下のフォームから登録してください。</div>
       {% endif %}
     </div>
 
-    <!-- 選択中銘柄の環境要約 -->
-    {% if selected_env %}
+    <!-- ① 判定フォーム -->
     <div class="card">
-      <div class="card-header">
-        📘 選択中の銘柄
+      <div class="card-title">
+        <span class="idx">①</span> 5分足＋板から短期アクションを判定
       </div>
-      <p class="small">
-        銘柄コード: <strong>{{ selected_code }}</strong>
-        {% if selected_env.name %} / 銘柄名: <strong>{{ selected_env.name }}</strong>{% endif %}
-      </p>
-      {% if selected_env.updated_at %}
-      <p class="small">最終更新: {{ selected_env.updated_at }}</p>
-      {% endif %}
+
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="form_type" value="judge" />
+
+        <label>銘柄コード（判定する対象）</label>
+        <input
+          type="text"
+          name="judge_symbol"
+          placeholder="例: 9984"
+          value="{{ selected_code }}"
+          inputmode="numeric"
+        />
+
+        <label>5分足チャート画像</label>
+        <div class="file-row">
+          <input type="file" name="chart_image" accept="image/*" />
+        </div>
+        <div class="hint">5分足チャートのスクショをアップロードしてください。</div>
+
+        <label>気配値（板）画像</label>
+        <div class="file-row">
+          <input type="file" name="board_image" accept="image/*" />
+        </div>
+        <div class="hint">板のスクショをアップロードしてください。</div>
+
+        <label>補足メモ（任意）</label>
+        <textarea
+          name="judge_memo"
+          placeholder="例: 自分のエントリー価格や、直近のニュースなどメモしたいことがあれば。"
+        ></textarea>
+
+        <div style="margin-top: 12px;">
+          <button type="submit" class="btn btn-main">AI に判定してもらう</button>
+        </div>
+      </form>
+
+      {% if result %}
       <div class="result-box">
-        <div class="result-row">
-          <strong>環境要約:</strong><br />
-          {{ selected_env.summary }}
-        </div>
-      </div>
-    </div>
-    {% endif %}
-
-    <!-- 2カラム（PC）で並べる領域 -->
-    <div class="grid-2">
-
-      <!-- ① 5分足＋板から短期アクションを判定 -->
-      <div class="card">
-        <div class="card-header">
-          ① 5分足＋板から短期アクションを判定
-        </div>
-        <form method="post" enctype="multipart/form-data">
-          <input type="hidden" name="mode" value="judge" />
-
-          <div class="label">銘柄コード（判定する対象）</div>
-          <input
-            type="text"
-            name="judge_symbol_code"
-            placeholder="例: 9434"
-            value="{{ result.symbol_code if result else selected_code }}"
-          />
-
-          <div class="label">5分足チャート画像</div>
-          <input class="file-input" type="file" name="chart_image" accept="image/*" />
-
-          <div class="label">気配値（板）画像</div>
-          <input class="file-input" type="file" name="board_image" accept="image/*" />
-
-          <div class="label">補足メモ（任意）</div>
-          <textarea
-            name="judge_memo"
-            placeholder="例: 自分のエントリー価格や、直近のニュースなどメモしたいことがあれば。"
-          ></textarea>
-
-          <button type="submit" class="btn">AI に判定してもらう</button>
-        </form>
-
-        {% if result %}
-        <div class="result-box">
-          <div class="result-row">
-            <strong>銘柄:</strong>
-            {{ result.symbol_code }}
-            {% if result.symbol_name %} {{ result.symbol_name }}{% endif %}
-          </div>
-
-          <div class="result-row" style="margin-top:6px;">
-            <strong>アクション:</strong>
-            {% if result.action == "BUY" %}
-              <span class="chip chip-buy">BUY（買い寄り）</span>
-            {% elif result.action == "SELL" %}
-              <span class="chip chip-sell">SELL（売り寄り）</span>
-            {% else %}
-              <span class="chip chip-hold">HOLD（様子見）</span>
-            {% endif %}
-          </div>
-
-          <div class="result-row" style="margin-top:6px;">
-            <strong>理由:</strong><br />
-            {{ result.reason }}
-          </div>
-
-          {% if result.buy_zone %}
-          <div class="result-row" style="margin-top:6px;">
-            <strong>買いを検討するゾーン:</strong><br />
-            {{ result.buy_zone }}
-          </div>
-          {% endif %}
-
-          {% if result.sell_zone %}
-          <div class="result-row" style="margin-top:6px;">
-            <strong>売りを検討するゾーン:</strong><br />
-            {{ result.sell_zone }}
-          </div>
-          {% endif %}
-        </div>
+        <div><strong>判定結果（{{ result.symbol }}）</strong></div>
+        <div>アクション: <strong>{{ result.action }}</strong></div>
+        <div style="margin-top:4px;">理由: {{ result.reason }}</div>
+        {% if result.price_hint %}
+        <div style="margin-top:4px;">価格の目安: {{ result.price_hint }}</div>
         {% endif %}
       </div>
+      {% endif %}
+    </div>
 
-      <!-- ② 日足・材料などの環境情報を登録（銘柄ごとに保存） -->
-      <div class="card">
-        <div class="card-header">
-          ② 日足・材料などの環境情報を登録（銘柄ごとに保存）
+    <!-- ② 環境登録フォーム -->
+    <div class="card">
+      <div class="card-title">
+        <span class="idx">②</span> 日足・材料などの環境情報を登録（銘柄ごとに保存）
+      </div>
+
+      <form method="post" enctype="multipart/form-data">
+        <input type="hidden" name="form_type" value="env" />
+
+        <label>銘柄コード（必須）</label>
+        <input
+          type="text"
+          name="env_symbol"
+          placeholder="例: 9984"
+          value="{{ selected_code }}"
+          inputmode="numeric"
+        />
+
+        <label>銘柄名（任意・メモ代わり）</label>
+        <input
+          type="text"
+          name="env_name"
+          placeholder="例: ソフトバンクグループ"
+        />
+
+        <label>日足チャート画像（任意）</label>
+        <div class="file-row">
+          <input type="file" name="daily_image" accept="image/*" />
         </div>
-        <form method="post" enctype="multipart/form-data">
-          <input type="hidden" name="mode" value="update_env" />
 
-          <div class="label">銘柄コード（必須）</div>
-          <input
-            type="text"
-            name="env_symbol_code"
-            placeholder="例: 9434"
-            value="{{ selected_code }}"
-          />
+        <label>追加の参考画像（任意・複数可）</label>
+        <div class="file-row">
+          <input type="file" name="extra_images" accept="image/*" multiple />
+        </div>
+        <div class="hint">例: 60分足チャート、ニュース、ランキングなどのスクショ。</div>
 
-          <div class="label">銘柄名（任意・メモ代わり）</div>
-          <input
-            type="text"
-            name="env_symbol_name"
-            placeholder="例: ソフトバンク"
-            value="{% if selected_env and selected_env.name %}{{ selected_env.name }}{% endif %}"
-          />
+        <label>参考URL（任意・複数行OK）</label>
+        <textarea
+          name="env_urls"
+          placeholder="1行につき1つURLを入力&#10;例: https://www.example.com/ir/..."
+        ></textarea>
 
-          <div class="label">日足チャート画像（任意）</div>
-          <input
-            class="file-input"
-            type="file"
-            name="daily_image"
-            accept="image/*"
-          />
-          <p class="small">
-            中期トレンドを把握するための日足スクショ。未指定なら前回の情報がそのまま残ります。
-          </p>
+        <label>環境メモ（任意）</label>
+        <textarea
+          name="env_memo"
+          placeholder="例: 決算内容、材料、地合いメモなど。"
+        ></textarea>
 
-          <div class="label">追加の参考画像（任意・複数可）</div>
-          <input
-            class="file-input"
-            type="file"
-            name="extra_images"
-            accept="image/*"
-            multiple
-          />
-          <p class="small">
-            例: 60分足チャート、ニュース、ランキング、出来高情報のスクショなど。
-          </p>
-
-          <div class="label">参考にしてほしいURL（任意・複数行OK）</div>
-          <textarea
-            name="env_urls"
-            placeholder="1行に1つずつ URL を入力&#10;例: https://www.example.com/ir/..."
-          ></textarea>
-
-          <div class="label">環境メモ（任意）</div>
-          <textarea
-            name="env_memo"
-            placeholder="IRの要点、自分の見立て、注意しておきたい材料など。"
-          ></textarea>
-
-          <button type="submit" class="btn secondary">
+        <div style="margin-top: 12px;">
+          <button type="submit" class="btn btn-main">
             この銘柄の環境を更新する
           </button>
-        </form>
-      </div>
-
-    </div><!-- /.grid-2 -->
-
-    <p class="small" style="margin-top:12px; text-align:center;">
-      ※ 登録した環境情報はサーバー側に銘柄ごとに保存され、次回以降の判定で自動的に考慮されます。
-    </p>
+        </div>
+      </form>
+    </div>
   </div>
 </body>
 </html>
