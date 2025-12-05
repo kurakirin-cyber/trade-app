@@ -1,305 +1,151 @@
 import os
-import json
-import base64
-import io
-from pathlib import Path
+import requests
+from bs4 import BeautifulSoup
+from flask import Flask, render_template, request, redirect, url_for, flash
+import google.generativeai as genai
+from dotenv import load_dotenv
+import PIL.Image
 
-from flask import (
-    Flask,
-    render_template,
-    request,
-    redirect,
-    url_for,
-    flash,
-)
-
-from openai import OpenAI
-from PIL import Image
-
-# =========================================================
-# 基本設定
-# =========================================================
-
-BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATA_DIR.mkdir(exist_ok=True)
-
-ENV_JSON = DATA_DIR / "environments.json"
+# ローカル開発用の設定読み込み
+load_dotenv()
 
 app = Flask(__name__)
-# Render なら環境変数に入れておくのがベスト
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret")
+app.secret_key = 'super_secret_key_for_flash_messages'  # Flashメッセージに必要
 
-# OpenAI クライアント（Render の Environment に OPENAI_API_KEY を入れておく）
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# Geminiの設定 (Renderの環境変数から取得)
+GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
+genai.configure(api_key=GENAI_API_KEY)
 
+# モデル設定 (Proの方が文章の読解力が高いからおすすめやけど、遅いならFlashにしてな)
+model = genai.GenerativeModel('gemini-1.5-pro-latest')
 
-# =========================================================
-# ユーティリティ（環境データの保存 / 読み込み）
-# =========================================================
+# 簡易データベース (メモリ上に保存。再起動で消えるから注意な！)
+# 構造: { "9984": { "name": "SBG", "memo": "...", "urls": "...", "scraped_text": "..." } }
+STOCKS_DB = {}
 
-def load_env_data() -> dict:
-    """銘柄ごとの環境データを JSON から読み込む"""
-    if not ENV_JSON.exists():
-        return {}
-    try:
-        with ENV_JSON.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # 壊れてた場合は空で再スタート
-        return {}
+def fetch_url_content(url_text):
+    """URLからテキスト情報をざっくり引っこ抜く関数"""
+    if not url_text:
+        return ""
+    
+    urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
+    combined_text = ""
+    
+    for url in urls:
+        try:
+            # ニュースサイトとかの情報を取得
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                soup = BeautifulSoup(resp.content, 'html.parser')
+                # 本文っぽいやつだけ抽出 (pタグとか)
+                text = ' '.join([p.text for p in soup.find_all(['p', 'h1', 'h2'])])
+                combined_text += f"\n[URL情報: {url}]\n{text[:1000]}..." # 長すぎるとアレやから1000文字で切る
+        except Exception as e:
+            print(f"URL読み込み失敗: {e}")
+    
+    return combined_text
 
-
-def save_env_data(data: dict) -> None:
-    """銘柄ごとの環境データを JSON に保存"""
-    with ENV_JSON.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-# =========================================================
-# ユーティリティ（画像 → base64 data URL）
-# =========================================================
-
-def file_to_data_url(file_storage) -> str:
-    """
-    Flask の FileStorage を PNG の data URL に変換
-    OpenAI Responses API に input_image として渡す用
-    """
-    img = Image.open(file_storage.stream).convert("RGB")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{b64}"
-
-
-# =========================================================
-# OpenAI で「5分足＋板」から短期アクション判定
-# =========================================================
-
-def judge_short_term_action(stock_code: str,
-                            chart_file,
-                            orderbook_file,
-                            extra_note: str | None) -> str:
-    """
-    5分足チャート画像 + 板画像 (+ 補足メモ) をもとに
-    OpenAI Responses API でアクション判定する
-    """
-
-    # 画像を data URL に変換
-    chart_data_url = file_to_data_url(chart_file)
-    orderbook_data_url = file_to_data_url(orderbook_file)
-
-    # その銘柄の環境データを読み込み（あれば）
-    env_data = load_env_data()
-    env = env_data.get(stock_code, {})
-
-    env_text_parts = []
-    if env.get("stock_name"):
-        env_text_parts.append(f"銘柄名: {env['stock_name']}")
-    if env.get("urls"):
-        env_text_parts.append(f"参考URL:\n{env['urls']}")
-    if env.get("memo"):
-        env_text_parts.append(f"環境メモ:\n{env['memo']}")
-
-    env_text = "\n\n".join(env_text_parts) if env_text_parts else "登録された環境情報はありません。"
-
-    prompt = f"""
-あなたは日本株のデイトレードを支援するアナリストです。
-
-銘柄コード: {stock_code}
-
-この銘柄について、以下の情報を考慮して
-「ごく短期（数時間〜当日中）のトレードアクション」を判定してください。
-
-【入力情報】
-- 5分足チャート画像
-- 板（気配値）の画像
-- 補足メモ
-- 事前に登録されている日足・材料などの環境メモ
-
-【登録済みの環境情報】
-{env_text}
-
-【補足メモ】（ユーザー入力）
-{extra_note or "（特に補足なし）"}
-
-【出力フォーマット（必ずこの形式で）】
-
-1. 今の短期アクション
-   - 「今すぐ買い」「押し目待ち」「今すぐ売り」「ホールド」のいずれかを1つだけ。
-
-2. アクションの理由（5〜7行程度）
-   - 5分足のトレンド、出来高の勢い、板の厚さ・偏りなどを根拠に説明。
-
-3. もし「ホールド」の場合：
-   - 追加で買うなら狙いたい価格帯（○○円〜○○円）
-
-4. もし「今すぐ売り」の場合：
-   - 利確・損切りの目安価格帯（○○円〜○○円）
-
-5. もし「今すぐ買い」の場合：
-   - エントリーしたい価格帯（○○円〜○○円）
-
-日本語で、箇条書きを使ってわかりやすく出力してください。
-"""
-
-    # ★ここが肝心：Responses API に合わせて type を input_text / input_image にする
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt.strip(),
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": {"url": chart_data_url},
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": {"url": orderbook_data_url},
-                    },
-                ],
-            }
-        ],
-        max_output_tokens=800,
-    )
-
-    # 出力テキストを取り出す
-    result_text = ""
-    for out in response.output:
-        for block in out.content:
-            if getattr(block, "type", "") == "output_text":
-                result_text += block.text
-
-    return result_text.strip()
-
-
-# =========================================================
-# ルーティング
-# =========================================================
-
-@app.route("/", methods=["GET"])
+@app.route('/')
 def index():
-    """
-    メイン画面表示
-    - 登録済み銘柄一覧
-    - 5分足＋板判定フォーム
-    - 環境登録フォーム
-    """
-    env_data = load_env_data()
-    # 上部の「登録済み銘柄一覧」に出す用
-    registered_envs = [
-        {
-            "code": code,
-            "name": info.get("stock_name", ""),
-            "memo": info.get("memo", ""),
-            "urls": info.get("urls", ""),
-        }
-        for code, info in env_data.items()
-    ]
-    # index.html 側で {{ registered_envs }} を使って一覧表示してね
-    return render_template(
-        "index.html",
-        registered_envs=registered_envs,
-        judge_result=None,
-    )
+    # トップページ表示。保存してる銘柄情報を渡す
+    return render_template('index.html', registered_envs=STOCKS_DB)
 
-
-@app.route("/judge", methods=["POST"])
-def handle_judge():
-    """
-    ① 5分足＋板から短期アクションを判定
-    フォームの name は以下を想定：
-      stock_code        … 判定対象の銘柄コード
-      chart_image       … 5分足チャート画像
-      orderbook_image   … 板画像
-      extra_note        … 補足メモ（任意）
-    """
-    stock_code = request.form.get("stock_code", "").strip()
-    chart_file = request.files.get("chart_image")
-    orderbook_file = request.files.get("orderbook_image")
-    extra_note = request.form.get("extra_note", "").strip()
-
-    if not stock_code:
-        flash("銘柄コードを入力してください。", "error")
-        return redirect(url_for("index"))
-
-    if not chart_file or not orderbook_file:
-        flash("5分足チャート画像と板画像は必須です。", "error")
-        return redirect(url_for("index"))
-
-    try:
-        result_text = judge_short_term_action(
-            stock_code=stock_code,
-            chart_file=chart_file,
-            orderbook_file=orderbook_file,
-            extra_note=extra_note,
-        )
-    except Exception as e:
-        flash(f"判定中にエラーが発生しました: {e}", "error")
-        return redirect(url_for("index"))
-
-    env_data = load_env_data()
-    registered_envs = [
-        {
-            "code": code,
-            "name": info.get("stock_name", ""),
-            "memo": info.get("memo", ""),
-            "urls": info.get("urls", ""),
-        }
-        for code, info in env_data.items()
-    ]
-
-    # 判定結果を同じ画面の下部に表示する想定
-    return render_template(
-        "index.html",
-        registered_envs=registered_envs,
-        judge_result=result_text,
-        judged_code=stock_code,
-    )
-
-
-@app.route("/save_environment", methods=["POST"])
+@app.route('/save_environment', methods=['POST'])
 def save_environment():
-    """
-    ② 日足・材料などの環境情報を登録（銘柄ごとに保存）
+    """環境認識情報を保存する"""
+    code = request.form.get('env_stock_code')
+    name = request.form.get('env_stock_name')
+    urls = request.form.get('env_urls')
+    memo = request.form.get('env_memo')
 
-    フォームの name は以下を想定：
-      env_stock_code … 銘柄コード（必須）
-      env_stock_name … 銘柄名（任意・メモ代わり）
-      env_urls       … 参考URL（複数行OK）
-      env_memo       … 環境メモ（任意）
-    画像（日足など）は一旦保存せず、テキストだけを AI に渡す想定。
-    """
-    stock_code = request.form.get("env_stock_code", "").strip()
-    stock_name = request.form.get("env_stock_name", "").strip()
-    urls = request.form.get("env_urls", "").strip()
-    memo = request.form.get("env_memo", "").strip()
+    if not code:
+        flash('銘柄コードがないと保存できへんで！', 'error')
+        return redirect(url_for('index'))
 
-    if not stock_code:
-        flash("環境登録用の銘柄コードは必須です。", "error")
-        return redirect(url_for("index"))
+    # URLの中身をスクレイピングして要約用テキストを作る
+    scraped_text = fetch_url_content(urls)
 
-    data = load_env_data()
-    data[stock_code] = {
-        "stock_name": stock_name,
+    # メモリに保存
+    STOCKS_DB[code] = {
+        "name": name,
         "urls": urls,
         "memo": memo,
+        "scraped_text": scraped_text  # AIに読ませる用
     }
-    save_env_data(data)
 
-    flash(f"銘柄 {stock_code} の環境情報を保存しました。", "success")
-    return redirect(url_for("index"))
+    flash(f'銘柄コード {code} ({name}) の環境情報を保存したで！', 'success')
+    return redirect(url_for('index'))
 
+@app.route('/judge', methods=['POST'])
+def judge():
+    """5分足と板画像＋保存情報の統合判断"""
+    try:
+        if not GENAI_API_KEY:
+            flash('APIキーが設定されてへんで！Renderの設定見てな。', 'error')
+            return redirect(url_for('index'))
 
-# =========================================================
-# エントリポイント（ローカル実行用）
-# =========================================================
+        # フォームからの入力
+        code = request.form.get('stock_code')
+        extra_note = request.form.get('extra_note')
+        chart_file = request.files.get('chart_image')
+        board_file = request.files.get('orderbook_image')
 
-if __name__ == "__main__":
-    # Render 上では使われないが、ローカルデバッグ用
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+        # 画像チェック
+        if not chart_file or not board_file:
+            flash('画像は2枚とも必須やで！', 'error')
+            return redirect(url_for('index'))
+
+        # 保存されている環境情報を取得
+        env_info = STOCKS_DB.get(code, {})
+        env_context = f"""
+        [事前登録された環境認識情報]
+        銘柄名: {env_info.get('name', '不明')}
+        メモ: {env_info.get('memo', 'なし')}
+        ニュース/資料の要約情報: {env_info.get('scraped_text', 'なし')}
+        """
+
+        # 画像を開く
+        chart_img = PIL.Image.open(chart_file)
+        board_img = PIL.Image.open(board_file)
+
+        # プロンプト作成
+        prompt = f"""
+        あなたは超一流のデイトレーダーです。
+        以下の情報に基づき、**HTML形式**で見やすく判断を出力してください。
+
+        【入力情報】
+        1. 5分足チャート画像（今のトレンドとエントリータイミング用）
+        2. 板情報画像（需給の強さ用）
+        3. 補足メモ: {extra_note}
+        4. 背景情報（日足・材料など）:
+        {env_context}
+
+        【出力要件】
+        JSONではなく、Webページに埋め込むための**HTMLタグ**を使って出力してください。
+        以下の構成でお願いします。
+        - 結論（<h3>タグで、色付き文字などで BUY / SELL / WAIT を強調）
+        - エントリー・利確・損切りの具体的数値（<ul>リスト形式）
+        - 根拠の解説（<p>タグ。板の厚さ、チャートの形、背景情報を絡めて論理的に）
+        - リスク注意点（あれば）
+
+        結論はズバッと言ってください。
+        """
+
+        # Geminiに投げる
+        response = model.generate_content([prompt, chart_img, board_img])
+        result_html = response.text
+
+        # 結果を表示するためにページに戻る
+        # 入力値を保持するために form_values も渡す
+        return render_template('index.html', 
+                             judge_result=result_html,
+                             registered_envs=STOCKS_DB,
+                             form_values={'stock_code': code, 'extra_note': extra_note})
+
+    except Exception as e:
+        print(f"Error: {e}")
+        flash(f'エラー起きたわ...: {str(e)}', 'error')
+        return redirect(url_for('index'))
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
