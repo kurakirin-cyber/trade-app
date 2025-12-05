@@ -2,8 +2,9 @@ import base64
 import json
 import os
 import textwrap
-import requests
 from datetime import datetime
+
+import requests
 from flask import Flask, render_template, request
 from openai import OpenAI
 
@@ -15,20 +16,24 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 app = Flask(__name__)
 
+# 保存用ファイル（銘柄ごとの環境サマリ）
+# {
+#   "version": 1,
+#   "symbols": {
+#       "9434": {"summary": "...", "updated_at": "...", "name": "ソフトバンク"},
+#       "6954": {...}
+#   }
+# }
 CONTEXT_FILE = "global_context.json"
 
 
 # ========= 共通ユーティリティ =========
-def _now_str() -> str:
+def now_str():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def load_context_symbols() -> dict:
-    """
-    保存済みの銘柄ごとの環境情報を読み込む。
-    戻り値: { "6954": {"summary": "...", "updated_at": "...", "name": "ファナック"}, ... }
-    旧フォーマット（summary だけ）も一応読み替え対応。
-    """
+def load_symbol_contexts():
+    """保存済みの銘柄ごとの環境情報を読み込む。"""
     if not os.path.exists(CONTEXT_FILE):
         return {}
 
@@ -44,12 +49,12 @@ def load_context_symbols() -> dict:
         if isinstance(symbols, dict):
             return symbols
 
-    # 旧フォーマット（1銘柄ぶんしかないやつ）を救済
+    # 旧フォーマット（summaryだけのやつ）を救済
     if isinstance(data, dict) and "summary" in data:
         return {
-            "_default": {
+            "_legacy": {
                 "summary": data.get("summary", ""),
-                "updated_at": data.get("updated_at", _now_str()),
+                "updated_at": data.get("updated_at", now_str()),
                 "name": data.get("name", ""),
             }
         }
@@ -57,22 +62,22 @@ def load_context_symbols() -> dict:
     return {}
 
 
-def save_context_symbol(symbol: str, name: str, summary: str) -> None:
-    """
-    1銘柄ぶんの環境要約を保存（上書き）。
-    """
-    symbol = symbol.strip()
+def save_context_symbol(symbol, name, summary):
+    """1銘柄ぶんの環境要約を保存（上書き）。"""
+    symbol = (symbol or "").strip()
     name = (name or "").strip()
+    if not symbol:
+        return
 
-    all_symbols = load_context_symbols()
+    all_symbols = load_symbol_contexts()
     all_symbols[symbol] = {
         "summary": summary,
-        "updated_at": _now_str(),
+        "updated_at": now_str(),
         "name": name,
     }
 
     data = {
-        "version": 2,
+        "version": 1,
         "symbols": all_symbols,
     }
 
@@ -80,21 +85,16 @@ def save_context_symbol(symbol: str, name: str, summary: str) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def to_data_url(img_bytes: bytes) -> str:
+def to_data_url(img_bytes):
     b64 = base64.b64encode(img_bytes).decode("utf-8")
     return f"data:image/png;base64,{b64}"
 
 
 # ========= 日足＋材料などの環境要約を作る =========
-def build_environment_summary(
-    daily_bytes: bytes | None,
-    extra_imgs: list[bytes],
-    urls: list[str],
-    memo_text: str,
-):
+def build_environment_summary(daily_bytes, extra_imgs, urls, memo_text):
     """
     日足画像（任意）、追加画像複数、URL群、テキストメモを GPT に渡して
-    「今日の環境・材料」要約テキストを作ってもらう。
+    「その銘柄の環境サマリ」を作ってもらう。
     """
     contents = []
 
@@ -144,7 +144,6 @@ def build_environment_summary(
         try:
             resp = requests.get(url, timeout=5)
             text = resp.text
-            # 長すぎると重いので先頭だけ
             snippet = textwrap.shorten(text, width=2000, placeholder="...")
         except Exception as e:
             snippet = f"(URL取得エラー: {e})"
@@ -162,7 +161,7 @@ def build_environment_summary(
         contents.append(
             {
                 "type": "input_text",
-                "text": f"ユーザーからのメモ:\n{memo_text}",
+                "text": f"ユーザーからの環境メモ:\n{memo_text}",
             }
         )
 
@@ -185,12 +184,7 @@ def build_environment_summary(
 
 
 # ========= 5分足＋板から短期アクション判定 =========
-def analyze_intraday(
-    chart_bytes: bytes,
-    board_bytes: bytes,
-    memo_text: str,
-    env_summary: str | None,
-):
+def analyze_intraday(chart_bytes, board_bytes, memo_text, env_summary):
     """
     5分足チャート＋板＋（任意）環境要約を元に、BUY/SELL/HOLD を判定。
     ついでに「買い/売りの狙い目レンジ」も出してもらう。
@@ -219,8 +213,8 @@ def analyze_intraday(
 {
   "action": "buy | sell | hold",
   "reason": "日本語で120文字以内の理由",
-  "buy_range": "買いの狙い目レンジ（例: '3300-3350'。不要なら null または空文字）",
-  "sell_range": "売りの狙い目レンジ（例: '3450-3500'。不要なら null または空文字）"
+  'buy_range': "買いの狙い目レンジ（例: '3300-3350'。不要なら null または空文字）",
+  'sell_range': "売りの狙い目レンジ（例: '3450-3500'。不要なら null または空文字）"
 }
 
 余計な文章やコメントは一切書かず、必ずこの JSON だけを返してください。
@@ -288,21 +282,19 @@ def analyze_intraday(
     if action not in ["buy", "sell", "hold"]:
         action = "hold"
 
-    result = {
+    return {
         "action": action.upper(),
         "reason": reason,
         "buy_range": buy_range,
         "sell_range": sell_range,
     }
 
-    return result
-
 
 # ========= Flask ルーティング =========
 @app.route("/", methods=["GET", "POST"])
 def index():
-    # すべての環境データを読み込み（銘柄一覧用）
-    symbol_map = load_context_symbols()
+    # 登録済み銘柄一覧を読む
+    symbol_map = load_symbol_contexts()
     env_list = []
     for sym, info in symbol_map.items():
         env_list.append(
@@ -317,22 +309,18 @@ def index():
     result = None
     error = None
     env_message = None
-
-    # どの銘柄が選択中か
-    selected_symbol = None
-    selected_info = None
+    selected_symbol = ""
 
     if request.method == "POST":
         mode = request.form.get("mode")
-        # 画面上の共通銘柄入力から hidden にコピーされたやつ
-        symbol_judge = (request.form.get("symbol_judge") or "").strip()
-        symbol_env = (request.form.get("symbol_env") or "").strip()
-        selected_symbol = symbol_judge or symbol_env
 
-        # --- まず 5分足＋板による判定（頻度高いのでこちらを先） ---
+        # 5分足＋板判定
         if mode == "judge":
+            symbol_judge = (request.form.get("symbol_judge") or "").strip()
+            selected_symbol = symbol_judge
+
             if not symbol_judge:
-                error = "銘柄コードを入力してください。"
+                error = "判定したい銘柄コードを入力してください。"
             else:
                 chart_file = request.files.get("chart_image")
                 board_file = request.files.get("board_image")
@@ -356,11 +344,16 @@ def index():
                             memo_text=memo_text,
                             env_summary=env_summary,
                         )
+                        result["symbol"] = symbol_judge
                     except Exception as e:
                         error = f"判定中にエラーが発生しました: {e}"
 
-        # --- 次に 日足＋材料などの環境登録（任意・上書き） ---
+        # 環境登録
         elif mode == "update_env":
+            symbol_env = (request.form.get("symbol_env") or "").strip()
+            stock_name = (request.form.get("stock_name") or "").strip()
+            selected_symbol = symbol_env
+
             if not symbol_env:
                 error = "環境情報を登録する銘柄コードを入力してください。"
             else:
@@ -368,7 +361,6 @@ def index():
                 extra_files = request.files.getlist("extra_images")
                 urls_text = request.form.get("env_urls", "")
                 env_memo = request.form.get("env_memo", "")
-                stock_name = request.form.get("stock_name", "")
 
                 daily_bytes = (
                     daily_file.read() if daily_file and daily_file.filename else None
@@ -385,8 +377,8 @@ def index():
                     )
                     save_context_symbol(symbol_env, stock_name, summary)
 
-                    # 再読込して一覧も更新
-                    symbol_map = load_context_symbols()
+                    # 再読み込みして一覧を更新
+                    symbol_map = load_symbol_contexts()
                     env_list = []
                     for sym, info in symbol_map.items():
                         env_list.append(
@@ -400,24 +392,18 @@ def index():
 
                     env_message = f"銘柄 {symbol_env} の環境情報を更新しました。"
                 except Exception as e:
-                    error = f"環境更新中にエラーが発生しました: {e}"
-
-    # 選択中銘柄の情報（モーダル用）
-    if selected_symbol and selected_symbol in symbol_map:
-        selected_info = symbol_map[selected_symbol]
+                    error = f"環境情報の更新中にエラーが発生しました: {e}"
 
     return render_template(
         "index.html",
+        env_list=env_list,
         result=result,
         error=error,
         env_message=env_message,
-        env_list=env_list,
         selected_symbol=selected_symbol,
-        selected_info=selected_info,
     )
 
 
 if __name__ == "__main__":
-    # Render / ローカル両対応用
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
