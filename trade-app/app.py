@@ -12,19 +12,20 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = 'super_secret_key_for_flash_messages'
 
-# Geminiの設定
+# Geminiの設定 (Renderの環境変数から取得)
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
-# 【重要】一旦ここでモデルは定義せず、使う直前に呼び出す形に変更
-# (エラーハンドリングをしやすくするため)
+# モデル設定 (最新の2.5-proを指定！)
+# ここがエラーの原因やった場所や。確実に存在する名前に変更したで。
+model = genai.GenerativeModel('gemini-2.5-pro')
 
 # 簡易データベース
 STOCKS_DB = {}
 
 def fetch_url_content(url_text):
-    """URLからテキスト情報を引っこ抜く関数"""
+    """URLからテキスト情報をざっくり引っこ抜く関数"""
     if not url_text:
         return ""
     
@@ -74,8 +75,7 @@ def save_environment():
 
 @app.route('/judge', methods=['GET', 'POST'])
 def judge():
-    """5分足と板画像＋保存情報の統合判断"""
-    
+    # 手ぶら(GET)で来たらトップへ戻す
     if request.method == 'GET':
         return redirect(url_for('index'))
 
@@ -84,7 +84,6 @@ def judge():
             flash('APIキーが設定されてへんで！Renderの設定画面で GEMINI_API_KEY を入れてな。', 'error')
             return redirect(url_for('index'))
 
-        # フォーム入力
         code = request.form.get('stock_code')
         extra_note = request.form.get('extra_note')
         chart_file = request.files.get('chart_image')
@@ -94,7 +93,6 @@ def judge():
             flash('画像は2枚とも必須やで！', 'error')
             return redirect(url_for('index'))
 
-        # 環境情報
         env_info = STOCKS_DB.get(code, {})
         env_context = f"""
         [事前登録された環境認識情報]
@@ -103,74 +101,46 @@ def judge():
         ニュース/資料の要約情報: {env_info.get('scraped_text', 'なし')}
         """
 
-        # 画像を開く
         chart_img = PIL.Image.open(chart_file)
         board_img = PIL.Image.open(board_file)
 
-        # プロンプト
         prompt = f"""
         あなたは超一流のデイトレーダーです。
         以下の情報に基づき、**HTML形式**で見やすく判断を出力してください。
         
         【入力情報】
-        1. 5分足チャート画像
-        2. 板情報画像
+        1. 5分足チャート画像（今のトレンドとエントリータイミング用）
+        2. 板情報画像（需給の強さ用）
         3. 補足メモ: {extra_note}
-        4. 環境情報:
+        4. 背景情報（日足・材料など）:
         {env_context}
 
         【出力要件】
-        JSONではなく、Webページ用の**HTMLタグ**のみを出力（```html 不要）。
-        - <div class="p-4 bg-gray-50 rounded-lg"> で囲む。
-        - 結論（<h3>タグ、class="text-2xl font-bold mb-2"、BUY/SELL/WAITを強調）
-        - エントリー・利確・損切りの数値（<ul>リスト）
-        - 根拠（<p>タグ）
-        - リスク注意点
+        JSONではなく、Webページに埋め込むための**HTMLタグ**のみを出力してください（```html 不要）。
+        以下の構成でお願いします。
+        - <div class="p-4 bg-gray-50 rounded-lg"> で囲むこと。
+        - 結論（<h3>タグで、class="text-2xl font-bold mb-2" を付与。 BUY / SELL / WAIT を色付きで強調）
+        - エントリー・利確・損切りの具体的数値（<ul>リスト形式）
+        - 根拠の解説（<p>タグ。板の厚さ、チャートの形、背景情報を絡めて論理的に）
+        - リスク注意点（あれば）
         
-        関西弁で出力してください。
+        結論はズバッと言ってください。関西弁で出力してください。
         """
 
-        # 【診断機能付きモデル実行】
-        # まずは gemini-1.5-flash を試す
-        target_model_name = 'gemini-1.5-flash'
+        response = model.generate_content([prompt, chart_img, board_img])
+        result_html = response.text
         
-        try:
-            model = genai.GenerativeModel(target_model_name)
-            response = model.generate_content([prompt, chart_img, board_img])
-            result_html = response.text.replace('```html', '').replace('```', '')
+        # 不要なMarkdown記号を削除
+        result_html = result_html.replace('```html', '').replace('```', '')
 
-            return render_template('index.html', 
-                                 judge_result=result_html,
-                                 registered_envs=STOCKS_DB,
-                                 form_values={'stock_code': code, 'extra_note': extra_note})
-
-        except Exception as api_error:
-            # もしエラーが出たら、使えるモデル一覧を取得してエラーメッセージに表示する
-            error_msg = str(api_error)
-            
-            # 404 Not Found (モデルが見つからない) 系のエラーの場合
-            if "404" in error_msg or "not found" in error_msg.lower():
-                available_models = []
-                try:
-                    for m in genai.list_models():
-                        if 'generateContent' in m.supported_generation_methods:
-                            available_models.append(m.name)
-                except:
-                    available_models = ["一覧取得失敗"]
-
-                # 画面にリストを表示してあげる
-                flash(f"【モデル設定エラー】'{target_model_name}' が使えへんみたいや。\n"
-                      f"今使えるモデル一覧はこれやで: {', '.join(available_models)}\n"
-                      f"コード内のモデル名をこれに合わせて書き換えてな。", 'error')
-            else:
-                # その他のエラー
-                flash(f'AI呼び出しエラー: {error_msg}', 'error')
-            
-            return redirect(url_for('index'))
+        return render_template('index.html', 
+                             judge_result=result_html,
+                             registered_envs=STOCKS_DB,
+                             form_values={'stock_code': code, 'extra_note': extra_note})
 
     except Exception as e:
         print(f"Error: {e}")
-        flash(f'システムエラー: {str(e)}', 'error')
+        flash(f'エラー起きたわ...: {str(e)}', 'error')
         return redirect(url_for('index'))
 
 if __name__ == '__main__':
