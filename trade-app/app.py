@@ -19,7 +19,7 @@ if GENAI_API_KEY:
 
 # モデル設定 (最新の2.5-proを指定！)
 # ここがエラーの原因やった場所や。確実に存在する名前に変更したで。
-model = genai.GenerativeModel('gemini-2.5-pro')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # 簡易データベース
 STOCKS_DB = {}
@@ -145,3 +145,4 @@ def judge():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
