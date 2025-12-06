@@ -18,7 +18,7 @@ if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
 # モデル設定
-model = genai.GenerativeModel('gemini-1.5-pro')
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # 簡易データベース (メモリ上に保存。再起動で消えるから注意な！)
 STOCKS_DB = {}
@@ -159,4 +159,5 @@ def judge():
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
+
 
