@@ -177,8 +177,6 @@
             const btn = document.getElementById('submitBtn');
             const spinner = document.getElementById('loadingSpinner');
             
-            // ボタンを無効化して二重送信防止
-            // btn.disabled = true; // 注意: これをやるとsubmit自体がキャンセルされる場合があるので、見た目だけ変えるか、CSSでpointer-eventsを切るのが無難
             btn.classList.add('opacity-75', 'cursor-not-allowed');
             spinner.style.display = 'block';
             
