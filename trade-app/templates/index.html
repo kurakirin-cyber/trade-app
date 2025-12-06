@@ -12,6 +12,20 @@
             background-color: #f3f4f6;
             color: #1f2937;
         }
+        /* 読み込み中のアニメーション */
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 1s linear infinite;
+            display: none; /* 最初は隠す */
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
 <body class="p-4 md:p-8 max-w-2xl mx-auto">
@@ -31,19 +45,19 @@
             <span class="text-green-500 text-xl">✅</span>
             登録済み銘柄
         </h2>
-        <p class="text-gray-500 text-sm">
+        <div id="savedStocks" class="text-gray-500 text-sm">
             まだ登録された銘柄はありません。下のフォームから登録してください。
-        </p>
+        </div>
     </section>
 
-    <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+    <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-8">
         <h2 class="font-bold text-lg mb-4">① 5分足＋板から短期アクションを判定</h2>
 
-        <form id="predictionForm" class="space-y-5">
+        <form id="predictionForm" class="space-y-5" onsubmit="return false;">
             
             <div>
                 <label class="block text-gray-700 text-sm font-medium mb-1">銘柄コード（判定する対象）</label>
-                <input type="text" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" id="ticker" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
 
             <div>
@@ -51,11 +65,10 @@
                 <div class="flex items-center gap-2 mb-1">
                     <label class="cursor-pointer bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm transition">
                         ファイルを選択
-                        <input type="file" class="hidden">
+                        <input type="file" id="chartImg" class="hidden" accept="image/*">
                     </label>
-                    <span class="text-sm text-gray-500">ファイル未選択</span>
+                    <span id="chartImgName" class="text-sm text-gray-500">ファイル未選択</span>
                 </div>
-                <p class="text-xs text-gray-500">5分足チャートのスクショをアップロードしてください。</p>
             </div>
 
             <div>
@@ -63,24 +76,65 @@
                 <div class="flex items-center gap-2 mb-1">
                     <label class="cursor-pointer bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm transition">
                         ファイルを選択
-                        <input type="file" class="hidden">
+                        <input type="file" id="boardImg" class="hidden" accept="image/*">
                     </label>
-                    <span class="text-sm text-gray-500">ファイル未選択</span>
+                    <span id="boardImgName" class="text-sm text-gray-500">ファイル未選択</span>
                 </div>
-                <p class="text-xs text-gray-500">板のスクショをアップロードしてください。</p>
             </div>
 
             <div>
                 <label class="block text-gray-700 text-sm font-medium mb-1">補足メモ（任意）</label>
-                <textarea placeholder="例: 自分のエントリー価格や、直近のニュースなどメモしておきたいことがあれば。" class="w-full border border-gray-300 rounded-lg p-3 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
+                <textarea id="memo" placeholder="例: 自分のエントリー価格や、直近のニュースなど" class="w-full border border-gray-300 rounded-lg p-3 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
             </div>
 
-            <button type="button" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-full transition shadow-md text-center">
-                AIに判定してもらう
+            <button type="button" onclick="handlePredict()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-full transition shadow-md flex justify-center items-center gap-2">
+                <span>AIに判定してもらう</span>
+                <div class="loader" id="loadingSpinner"></div>
             </button>
 
         </form>
     </section>
 
+    <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <h2 class="font-bold text-lg mb-4">② 日足・材料などの環境情報を登録</h2>
+        <form class="space-y-4" onsubmit="return false;">
+            <div>
+                <label class="block text-gray-700 text-sm font-medium mb-1">銘柄コード</label>
+                <input type="text" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3">
+            </div>
+            <div>
+                 <label class="block text-gray-700 text-sm font-medium mb-1">日足・環境認識メモ</label>
+                <textarea placeholder="例: 上昇トレンド中。決算通過済み。" class="w-full border border-gray-300 rounded-lg p-3 h-20 resize-none"></textarea>
+            </div>
+             <button class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-lg transition">
+                環境情報を保存する
+            </button>
+        </form>
+    </section>
+
+    <script>
+        // ファイル名を表示する機能
+        document.getElementById('chartImg').addEventListener('change', function(e){
+            if(e.target.files[0]) document.getElementById('chartImgName').innerText = e.target.files[0].name;
+        });
+        document.getElementById('boardImg').addEventListener('change', function(e){
+            if(e.target.files[0]) document.getElementById('boardImgName').innerText = e.target.files[0].name;
+        });
+
+        // 判定ボタンが押された時の処理
+        function handlePredict() {
+            // ローディング表示
+            const spinner = document.getElementById('loadingSpinner');
+            spinner.style.display = 'block';
+
+            // エラー回避のため、本来のフォーム送信は無効化済み
+            // ここにAIとの通信処理（API連携）を後で書くことになる
+            
+            setTimeout(() => {
+                spinner.style.display = 'none';
+                alert('【テスト成功】\nサーバー送信エラーは回避されました！\n\n※今はまだAIのAPIキーが設定されていないので、ここまでしか動きません。\n次はAPIキーを設定して、実際に判定できるようにしましょう。');
+            }, 1000);
+        }
+    </script>
 </body>
 </html>
