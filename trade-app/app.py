@@ -58,20 +58,20 @@ def index():
 def save_environment():
     """環境認識情報を保存する"""
     code = request.form.get('env_stock_code')
-    name = request.form.get('env_stock_name') # HTML側に追加が必要
-    urls = request.form.get('env_urls') # HTML側に追加が必要（今回は簡易的にメモ欄を使う想定なら不要かもやけど一応）
+    name = request.form.get('env_stock_name')
+    urls = request.form.get('env_urls')
     memo = request.form.get('env_memo')
 
     if not code:
         flash('銘柄コードがないと保存できへんで！', 'error')
         return redirect(url_for('index'))
 
-    # URLが含まれていればスクレイピング（メモ欄にURLがあれば抽出するロジックに変えてもええな）
+    # URLが含まれていればスクレイピング
     scraped_text = fetch_url_content(urls) if urls else ""
 
     # メモリに保存
     STOCKS_DB[code] = {
-        "name": name if name else code, # 名前がなければコードを入れる
+        "name": name if name else code,
         "memo": memo,
         "scraped_text": scraped_text
     }
@@ -79,12 +79,17 @@ def save_environment():
     flash(f'銘柄コード {code} の環境情報を保存したで！', 'success')
     return redirect(url_for('index'))
 
-@app.route('/judge', methods=['POST'])
+@app.route('/judge', methods=['GET', 'POST']) # ←ここ重要！GETも許可してエラー画面回避
 def judge():
     """5分足と板画像＋保存情報の統合判断"""
+    
+    # もし手ぶら（GET）でアクセスしてきたらトップページへ強制送還
+    if request.method == 'GET':
+        return redirect(url_for('index'))
+
     try:
         if not GENAI_API_KEY:
-            flash('APIキーが設定されてへんで！Renderの設定見てな。', 'error')
+            flash('APIキーが設定されてへんで！Renderの設定画面で GEMINI_API_KEY を入れてな。', 'error')
             return redirect(url_for('index'))
 
         # フォームからの入力
@@ -139,7 +144,7 @@ def judge():
         response = model.generate_content([prompt, chart_img, board_img])
         result_html = response.text
 
-        # 念のためMarkdownのコードブロック記号を削除
+        # 余計な記号削除
         result_html = result_html.replace('```html', '').replace('```', '')
 
         return render_template('index.html', 
