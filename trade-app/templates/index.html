@@ -4,15 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SFM トレード支援ツール</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+        @import url('[https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap)');
         body {
             font-family: 'Noto Sans JP', sans-serif;
             background-color: #f3f4f6;
             color: #1f2937;
         }
-        /* 読み込み中のアニメーション */
         .loader {
             border: 4px solid #f3f3f3;
             border-top: 4px solid #3b82f6;
@@ -20,7 +19,7 @@
             width: 24px;
             height: 24px;
             animation: spin 1s linear infinite;
-            display: none; /* 最初は隠す */
+            display: none;
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
@@ -28,87 +27,139 @@
         }
     </style>
 </head>
-<body class="p-4 md:p-8 max-w-2xl mx-auto">
+<body class="p-4 md:p-8 max-w-3xl mx-auto">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="mb-6">
+                {% for category, message in messages %}
+                    <div class="p-4 mb-2 rounded-lg {% if category == 'error' %}bg-red-100 text-red-700 border-red-400{% else %}bg-green-100 text-green-700 border-green-400{% endif %} border">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    {% endwith %}
 
     <header class="mb-6">
         <h1 class="text-2xl font-bold flex items-center gap-2 mb-2">
             <span class="text-red-500 text-3xl">📈</span>
-            SFM トレード支援ツール（5分足＋板 → AI判定）
+            SFM トレード支援ツール
         </h1>
         <p class="text-sm text-gray-700 leading-relaxed">
-            上部で登録した銘柄の「日足・材料などの環境」を保存しておくと、5分足＋板で判定するたびに、その環境情報も自動で考慮してくれます。
+            上部で「環境認識」を登録してから、下部で「5分足＋板」を送ると、AIが統合的に判断します。
         </p>
     </header>
 
-    <section class="bg-white rounded-xl p-5 shadow-sm mb-6 border border-gray-100">
-        <h2 class="font-bold text-lg mb-2 flex items-center gap-2">
-            <span class="text-green-500 text-xl">✅</span>
-            登録済み銘柄
-        </h2>
-        <div id="savedStocks" class="text-gray-500 text-sm">
-            まだ登録された銘柄はありません。下のフォームから登録してください。
+    {% if judge_result %}
+    <section class="bg-blue-50 rounded-xl p-6 shadow-md border-2 border-blue-200 mb-8">
+        <h2 class="font-bold text-xl mb-4 text-blue-800">🤖 AIの判定結果</h2>
+        <div class="prose max-w-none">
+            {{ judge_result | safe }}
+        </div>
+        <div class="mt-4 text-center">
+            <a href="{{ url_for('index') }}" class="text-blue-600 underline text-sm">リセットして新しい判定を行う</a>
         </div>
     </section>
+    {% endif %}
 
     <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100 mb-8">
-        <h2 class="font-bold text-lg mb-4">① 5分足＋板から短期アクションを判定</h2>
+        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
+            <span class="text-green-500 text-xl">📝</span>
+            ① 日足・材料などの環境情報を登録
+        </h2>
+        
+        <div class="mb-6 bg-gray-50 p-4 rounded-lg">
+            <h3 class="text-sm font-bold text-gray-500 mb-2">現在メモリに保存されている銘柄:</h3>
+            {% if registered_envs %}
+                <ul class="space-y-2">
+                    {% for code, data in registered_envs.items() %}
+                        <li class="flex items-start gap-2 text-sm border-b pb-2 last:border-0">
+                            <span class="bg-gray-200 text-gray-800 px-2 py-0.5 rounded font-mono font-bold">{{ code }}</span>
+                            <div>
+                                <span class="font-bold">{{ data.name }}</span><br>
+                                <span class="text-gray-500 text-xs">{{ data.memo }}</span>
+                            </div>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="text-gray-400 text-sm">まだ登録はありません。</p>
+            {% endif %}
+        </div>
 
-        <form id="predictionForm" class="space-y-5" onsubmit="return false;">
+        <form action="{{ url_for('save_environment') }}" method="POST" class="space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 text-sm font-medium mb-1">銘柄コード</label>
+                    <input type="text" name="env_stock_code" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3" required>
+                </div>
+                <div>
+                    <label class="block text-gray-700 text-sm font-medium mb-1">銘柄名（任意）</label>
+                    <input type="text" name="env_stock_name" placeholder="例: ソフバン" class="w-full border border-gray-300 rounded-lg p-3">
+                </div>
+            </div>
+            <div>
+                 <label class="block text-gray-700 text-sm font-medium mb-1">日足・環境認識メモ</label>
+                <textarea name="env_memo" placeholder="例: 上昇トレンド中。決算通過済み。" class="w-full border border-gray-300 rounded-lg p-3 h-20 resize-none"></textarea>
+            </div>
+            <div>
+                <label class="block text-gray-700 text-sm font-medium mb-1">参考ニュースURL（任意・複数可）</label>
+               <textarea name="env_urls" placeholder="http://... (改行で区切って複数入力可)" class="w-full border border-gray-300 rounded-lg p-3 h-20 resize-none"></textarea>
+           </div>
+             <button type="submit" class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-lg transition">
+                環境情報を保存する
+            </button>
+        </form>
+    </section>
+
+    <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+        <h2 class="font-bold text-lg mb-4 flex items-center gap-2">
+            <span class="text-red-500 text-xl">⚡</span>
+            ② 5分足＋板から短期アクションを判定
+        </h2>
+
+        <form action="{{ url_for('judge') }}" method="POST" enctype="multipart/form-data" class="space-y-5" onsubmit="showLoader()">
             
             <div>
                 <label class="block text-gray-700 text-sm font-medium mb-1">銘柄コード（判定する対象）</label>
-                <input type="text" id="ticker" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <input type="text" name="stock_code" value="{{ form_values.stock_code if form_values else '' }}" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3 focus:outline-none focus:ring-2 focus:ring-blue-500" required>
             </div>
 
-            <div>
-                <label class="block text-gray-700 text-sm font-medium mb-1">5分足チャート画像</label>
-                <div class="flex items-center gap-2 mb-1">
-                    <label class="cursor-pointer bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm transition">
-                        ファイルを選択
-                        <input type="file" id="chartImg" class="hidden" accept="image/*">
-                    </label>
-                    <span id="chartImgName" class="text-sm text-gray-500">ファイル未選択</span>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-gray-700 text-sm font-medium mb-1">5分足チャート画像</label>
+                    <div class="flex items-center gap-2 mb-1">
+                        <label class="cursor-pointer bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 px-3 py-2 rounded text-sm transition w-full text-center">
+                            チャートを選択
+                            <input type="file" name="chart_image" id="chartImg" class="hidden" accept="image/*" required>
+                        </label>
+                    </div>
+                    <span id="chartImgName" class="text-xs text-gray-500 block truncate">選択なし</span>
                 </div>
-            </div>
 
-            <div>
-                <label class="block text-gray-700 text-sm font-medium mb-1">気配値（板）画像</label>
-                <div class="flex items-center gap-2 mb-1">
-                    <label class="cursor-pointer bg-gray-200 hover:bg-gray-300 text-gray-700 px-3 py-1.5 rounded text-sm transition">
-                        ファイルを選択
-                        <input type="file" id="boardImg" class="hidden" accept="image/*">
-                    </label>
-                    <span id="boardImgName" class="text-sm text-gray-500">ファイル未選択</span>
+                <div>
+                    <label class="block text-gray-700 text-sm font-medium mb-1">気配値（板）画像</label>
+                    <div class="flex items-center gap-2 mb-1">
+                        <label class="cursor-pointer bg-gray-100 hover:bg-gray-200 border border-gray-300 text-gray-700 px-3 py-2 rounded text-sm transition w-full text-center">
+                            板画像を選択
+                            <input type="file" name="orderbook_image" id="boardImg" class="hidden" accept="image/*" required>
+                        </label>
+                    </div>
+                    <span id="boardImgName" class="text-xs text-gray-500 block truncate">選択なし</span>
                 </div>
             </div>
 
             <div>
                 <label class="block text-gray-700 text-sm font-medium mb-1">補足メモ（任意）</label>
-                <textarea id="memo" placeholder="例: 自分のエントリー価格や、直近のニュースなど" class="w-full border border-gray-300 rounded-lg p-3 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"></textarea>
+                <textarea name="extra_note" placeholder="例: 3365円で売り板が厚い気がする..." class="w-full border border-gray-300 rounded-lg p-3 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none">{{ form_values.extra_note if form_values else '' }}</textarea>
             </div>
 
-            <button type="button" onclick="handlePredict()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-full transition shadow-md flex justify-center items-center gap-2">
+            <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-full transition shadow-md flex justify-center items-center gap-2">
                 <span>AIに判定してもらう</span>
                 <div class="loader" id="loadingSpinner"></div>
             </button>
 
-        </form>
-    </section>
-
-    <section class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-        <h2 class="font-bold text-lg mb-4">② 日足・材料などの環境情報を登録</h2>
-        <form class="space-y-4" onsubmit="return false;">
-            <div>
-                <label class="block text-gray-700 text-sm font-medium mb-1">銘柄コード</label>
-                <input type="text" placeholder="例: 9434" class="w-full border border-gray-300 rounded-lg p-3">
-            </div>
-            <div>
-                 <label class="block text-gray-700 text-sm font-medium mb-1">日足・環境認識メモ</label>
-                <textarea placeholder="例: 上昇トレンド中。決算通過済み。" class="w-full border border-gray-300 rounded-lg p-3 h-20 resize-none"></textarea>
-            </div>
-             <button class="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 rounded-lg transition">
-                環境情報を保存する
-            </button>
         </form>
     </section>
 
@@ -121,19 +172,18 @@
             if(e.target.files[0]) document.getElementById('boardImgName').innerText = e.target.files[0].name;
         });
 
-        // 判定ボタンが押された時の処理
-        function handlePredict() {
-            // ローディング表示
+        // 送信ボタン押下時の処理
+        function showLoader() {
+            const btn = document.getElementById('submitBtn');
             const spinner = document.getElementById('loadingSpinner');
-            spinner.style.display = 'block';
-
-            // エラー回避のため、本来のフォーム送信は無効化済み
-            // ここにAIとの通信処理（API連携）を後で書くことになる
             
-            setTimeout(() => {
-                spinner.style.display = 'none';
-                alert('【テスト成功】\nサーバー送信エラーは回避されました！\n\n※今はまだAIのAPIキーが設定されていないので、ここまでしか動きません。\n次はAPIキーを設定して、実際に判定できるようにしましょう。');
-            }, 1000);
+            // ボタンを無効化して二重送信防止
+            // btn.disabled = true; // 注意: これをやるとsubmit自体がキャンセルされる場合があるので、見た目だけ変えるか、CSSでpointer-eventsを切るのが無難
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            spinner.style.display = 'block';
+            
+            // 文言変更
+            btn.querySelector('span').innerText = 'AIが分析中...';
         }
     </script>
 </body>
