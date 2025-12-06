@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SFM トレード支援ツール v2</title>
+    <title>SFM トレード支援ツール v2.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
@@ -13,9 +13,13 @@
             width: 24px; height: 24px; animation: spin 1s linear infinite; display: none;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        /* モーダルのアニメーション */
+        .modal { transition: opacity 0.25s ease; }
+        body.modal-active { overflow-x: hidden; overflow-y: hidden !important; }
     </style>
 </head>
-<body class="p-4 md:p-8 max-w-4xl mx-auto">
+<body class="p-4 md:p-8 max-w-4xl mx-auto pb-24">
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -29,164 +33,240 @@
         {% endif %}
     {% endwith %}
 
-    <header class="mb-6">
-        <h1 class="text-2xl font-bold flex items-center gap-2 mb-2">
-            <span class="text-red-500 text-3xl">📈</span> SFM トレード支援ツール v2
-        </h1>
-        <p class="text-sm text-gray-700">「日足・決算・ニュース」を登録し、「5分足・板」で勝負する。</p>
+    <header class="mb-6 flex justify-between items-center">
+        <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
+                <span class="text-red-500 text-3xl">📈</span> SFM トレード支援ツール
+            </h1>
+            <p class="text-xs text-gray-500">v2.1 モーダル対応版</p>
+        </div>
+        
+        <button onclick="openModal()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-full shadow-lg transition flex items-center gap-2">
+            <span>📝 銘柄情報を登録・編集</span>
+        </button>
     </header>
 
-    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6 flex items-center gap-4">
-        <label class="font-bold whitespace-nowrap">登録済み銘柄を呼び出す:</label>
-        <select id="stockSelector" class="w-full p-2 border rounded-lg bg-gray-50" onchange="loadStockInfo(this.value)">
-            <option value="">-- 新規登録 / 選択してください --</option>
+    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row items-center gap-4">
+        <label class="font-bold whitespace-nowrap text-gray-700">登録済み銘柄を呼び出す:</label>
+        <select id="stockSelector" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-lg font-bold" onchange="loadStockInfo(this.value)">
+            {% if not registered_envs %}
+                <option value="">(登録された銘柄はありません)</option>
+            {% endif %}
             {% for code, data in registered_envs.items() %}
                 <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
             {% endfor %}
         </select>
     </section>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        
-        <section class="bg-white rounded-xl p-6 shadow-sm border border-green-200">
-            <h2 class="font-bold text-lg mb-4 flex items-center gap-2 text-green-700">
-                <span>📝</span> 環境情報の登録・更新
-            </h2>
-            <form action="{{ url_for('register_stock') }}" method="POST" enctype="multipart/form-data" class="space-y-4">
-                <div class="grid grid-cols-2 gap-2">
-                    <input type="text" name="reg_code" id="reg_code" placeholder="コード (例: 9984)" class="border p-2 rounded" required>
-                    <input type="text" name="reg_name" id="reg_name" placeholder="銘柄名" class="border p-2 rounded">
+    <section class="bg-white rounded-xl p-6 shadow-sm border border-red-200 mb-8">
+        <h2 class="font-bold text-lg mb-4 flex items-center gap-2 text-red-600">
+            <span>⚡</span> AIジャッジ (5分足+板)
+        </h2>
+        <form action="{{ url_for('judge') }}" method="POST" enctype="multipart/form-data" class="space-y-4" onsubmit="showLoader()">
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">銘柄コード (自動入力)</label>
+                <input type="text" name="stock_code" id="judge_code" value="{{ form_values.stock_code if form_values else '' }}" class="w-full bg-gray-100 border p-3 rounded font-bold text-xl tracking-wider" required readonly>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div class="border border-dashed border-gray-300 rounded p-4 text-center hover:bg-gray-50 transition">
+                    <label class="block text-sm font-bold text-gray-600 mb-2 cursor-pointer">
+                        📉 5分足チャート
+                        <input type="file" name="chart_image" accept="image/*" class="hidden" onchange="previewFile(this, 'chartPreview')">
+                    </label>
+                    <div id="chartPreview" class="text-xs text-gray-400">未選択</div>
                 </div>
-
-                <div class="border-t pt-2">
-                    <label class="block text-xs font-bold text-gray-500 mb-1">① 日足チャート (画像)</label>
-                    <input type="file" name="reg_daily_chart" accept="image/*" class="text-xs w-full text-gray-500">
-                    <p class="text-xs text-blue-500 mt-1" id="daily_chart_status">※アップロードで即更新されます</p>
+                <div class="border border-dashed border-gray-300 rounded p-4 text-center hover:bg-gray-50 transition">
+                    <label class="block text-sm font-bold text-gray-600 mb-2 cursor-pointer">
+                        📊 板情報 (気配値)
+                        <input type="file" name="orderbook_image" accept="image/*" class="hidden" onchange="previewFile(this, 'boardPreview')">
+                    </label>
+                    <div id="boardPreview" class="text-xs text-gray-400">未選択</div>
                 </div>
+            </div>
 
-                <div class="border-t pt-2">
-                    <label class="block text-xs font-bold text-gray-500 mb-1">② 決算書・適時開示 (画像)</label>
-                    <input type="file" name="reg_financial_file" accept="image/*" class="text-xs w-full text-gray-500">
-                    <div class="flex gap-4 mt-1 text-xs">
-                        <label><input type="radio" name="financial_mode" value="append" checked> 追加</label>
-                        <label><input type="radio" name="financial_mode" value="overwrite"> 上書き</label>
-                    </div>
-                    <p class="text-xs text-gray-400">※画像はAIが自動要約してテキスト保存します</p>
-                </div>
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">今回の補足メモ</label>
+                <textarea name="extra_note" class="w-full border p-2 rounded h-20 text-sm" placeholder="例: 3365円の売り板が厚い気がする...">{{ form_values.extra_note if form_values else '' }}</textarea>
+            </div>
+            
+            <div id="daily_chart_indicator" class="text-sm text-gray-400 text-center py-2 bg-gray-50 rounded">
+                (日足画像情報: 未ロード)
+            </div>
 
-                <div class="border-t pt-2">
-                    <label class="block text-xs font-bold text-gray-500 mb-1">③ 参考ニュースURL</label>
-                    <textarea name="reg_urls" placeholder="http://..." class="w-full border p-2 rounded h-16 text-xs"></textarea>
-                    <div class="flex gap-4 mt-1 text-xs">
-                        <label><input type="radio" name="news_mode" value="append" checked> 追加</label>
-                        <label><input type="radio" name="news_mode" value="overwrite"> 上書き</label>
-                    </div>
-                </div>
-
-                <div class="border-t pt-2">
-                    <label class="block text-xs font-bold text-gray-500 mb-1">④ 自由メモ</label>
-                    <textarea name="reg_memo" id="reg_memo" placeholder="監視中のポイントなど" class="w-full border p-2 rounded h-16 text-xs"></textarea>
-                </div>
-
-                <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded transition">
-                    この内容で登録 / 更新
-                </button>
-            </form>
-        </section>
-
-        <section class="bg-white rounded-xl p-6 shadow-sm border border-red-200">
-            <h2 class="font-bold text-lg mb-4 flex items-center gap-2 text-red-600">
-                <span>⚡</span> AIジャッジ (5分足+板)
-            </h2>
-            <form action="{{ url_for('judge') }}" method="POST" enctype="multipart/form-data" class="space-y-4" onsubmit="showLoader()">
-                <div>
-                    <label class="block text-xs font-bold text-gray-500">銘柄コード</label>
-                    <input type="text" name="stock_code" id="judge_code" value="{{ form_values.stock_code if form_values else '' }}" class="w-full border p-2 rounded font-bold text-lg" required>
-                </div>
-
-                <div class="grid grid-cols-2 gap-2">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500">5分足画像</label>
-                        <input type="file" name="chart_image" accept="image/*" class="text-xs w-full" required>
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500">板画像</label>
-                        <input type="file" name="orderbook_image" accept="image/*" class="text-xs w-full" required>
-                    </div>
-                </div>
-
-                <div>
-                    <label class="block text-xs font-bold text-gray-500">今回の補足メモ</label>
-                    <textarea name="extra_note" class="w-full border p-2 rounded h-20 text-xs">{{ form_values.extra_note if form_values else '' }}</textarea>
-                </div>
-
-                <button type="submit" id="submitBtn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-full shadow-lg flex justify-center items-center gap-2">
-                    <span>AI判定実行</span>
-                    <div class="loader" id="loadingSpinner"></div>
-                </button>
-            </form>
-        </section>
-    </div>
+            <button type="submit" id="submitBtn" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl shadow-lg flex justify-center items-center gap-2 text-lg">
+                <span>AI判定実行</span>
+                <div class="loader" id="loadingSpinner"></div>
+            </button>
+        </form>
+    </section>
 
     {% if judge_result %}
     <section class="bg-blue-50 rounded-xl p-6 shadow-md border-2 border-blue-200 mb-8 animate-fade-in">
         <h2 class="font-bold text-xl mb-4 text-blue-800">🤖 AIの判定結果</h2>
-        <div class="prose max-w-none text-sm md:text-base">
+        <div class="prose max-w-none text-sm md:text-base bg-white p-4 rounded-lg border border-blue-100">
             {{ judge_result | safe }}
         </div>
         <div class="mt-4 text-center">
-            <a href="{{ url_for('index') }}" class="text-blue-600 underline text-sm">リセット</a>
+            <a href="{{ url_for('index') }}" class="text-blue-600 underline text-sm hover:text-blue-800">結果をクリア</a>
         </div>
     </section>
     {% endif %}
 
+
+    <div id="envModal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-50">
+        
+        <div class="modal-overlay absolute w-full h-full bg-gray-900 opacity-50" onclick="closeModal()"></div>
+        
+        <div class="modal-container bg-white w-11/12 md:max-w-3xl mx-auto rounded-xl shadow-2xl z-50 overflow-y-auto max-h-[90vh]">
+            
+            <div class="modal-content py-4 text-left px-6">
+                <div class="flex justify-between items-center pb-3 border-b mb-4">
+                    <p class="text-2xl font-bold text-green-700">📝 環境情報の登録・更新</p>
+                    <div class="modal-close cursor-pointer z-50" onclick="closeModal()">
+                        <svg class="fill-current text-black" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+                            <path d="M14.53 4.53l-1.06-1.06L9 7.94 4.53 3.47 3.47 4.53 7.94 9l-4.47 4.47 1.06 1.06L9 10.06l4.47 4.47 1.06-1.06L10.06 9z"></path>
+                        </svg>
+                    </div>
+                </div>
+
+                <form action="{{ url_for('register_stock') }}" method="POST" enctype="multipart/form-data" class="space-y-4">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄コード *</label>
+                            <input type="text" name="reg_code" id="reg_code" placeholder="例: 9984" class="w-full border-2 border-gray-200 p-2 rounded focus:border-green-500 focus:outline-none" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄名</label>
+                            <input type="text" name="reg_name" id="reg_name" placeholder="例: ソフバン" class="w-full border-2 border-gray-200 p-2 rounded focus:border-green-500 focus:outline-none">
+                        </div>
+                    </div>
+
+                    <div class="bg-green-50 p-3 rounded border border-green-100">
+                        <label class="block text-xs font-bold text-green-800 mb-1">① 日足チャート (画像)</label>
+                        <input type="file" name="reg_daily_chart" accept="image/*" class="text-xs w-full text-gray-600">
+                        <p class="text-xs text-green-600 mt-1 font-bold" id="modal_daily_status">※アップロードで現在の画像を上書きします</p>
+                    </div>
+
+                    <div class="bg-gray-50 p-3 rounded border border-gray-100">
+                        <label class="block text-xs font-bold text-gray-500 mb-1">② 決算書・適時開示 (画像)</label>
+                        <input type="file" name="reg_financial_file" accept="image/*" class="text-xs w-full text-gray-600">
+                        <div class="flex gap-4 mt-2 text-xs">
+                            <label class="flex items-center"><input type="radio" name="financial_mode" value="append" checked class="mr-1"> 追加保存</label>
+                            <label class="flex items-center"><input type="radio" name="financial_mode" value="overwrite" class="mr-1"> 全上書き</label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1">③ 参考ニュースURL</label>
+                        <textarea name="reg_urls" placeholder="http://..." class="w-full border p-2 rounded h-16 text-xs"></textarea>
+                        <div class="flex gap-4 mt-1 text-xs text-gray-600">
+                            <label class="flex items-center"><input type="radio" name="news_mode" value="append" checked class="mr-1"> 追加保存</label>
+                            <label class="flex items-center"><input type="radio" name="news_mode" value="overwrite" class="mr-1"> 全上書き</label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1">④ 自由メモ</label>
+                        <textarea name="reg_memo" id="reg_memo" placeholder="監視中のポイントなど" class="w-full border p-2 rounded h-20 text-xs"></textarea>
+                    </div>
+
+                    <div class="flex justify-end pt-2">
+                        <button type="button" onclick="closeModal()" class="bg-transparent border border-gray-500 text-gray-500 hover:bg-gray-100 font-bold py-2 px-4 rounded mr-2">
+                            キャンセル
+                        </button>
+                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded shadow">
+                            保存する
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <script>
-        function showLoader() {
-            document.getElementById('submitBtn').classList.add('opacity-75', 'cursor-not-allowed');
-            document.getElementById('loadingSpinner').style.display = 'block';
-            document.getElementById('submitBtn').querySelector('span').innerText = '分析中...';
+        // --- モーダル制御 ---
+        function openModal() {
+            const modal = document.getElementById('envModal');
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            document.body.classList.add('modal-active');
         }
 
-        // 銘柄選択時のデータ取得処理
-        async function loadStockInfo(code) {
-            if (!code) {
-                // クリア
-                document.getElementById('reg_code').value = "";
-                document.getElementById('reg_name').value = "";
-                document.getElementById('reg_memo').value = "";
-                document.getElementById('daily_chart_status').innerText = "※アップロードで即更新されます";
-                document.getElementById('judge_code').value = "";
-                return;
+        function closeModal() {
+            const modal = document.getElementById('envModal');
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            document.body.classList.remove('modal-active');
+        }
+
+        // --- フォーム送信時のローディング表示 ---
+        function showLoader() {
+            const btn = document.getElementById('submitBtn');
+            const spinner = document.getElementById('loadingSpinner');
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            spinner.style.display = 'block';
+            btn.querySelector('span').innerText = '分析中...';
+        }
+
+        // --- ファイル選択時のファイル名プレビュー ---
+        function previewFile(input, targetId) {
+            const display = document.getElementById(targetId);
+            if(input.files && input.files[0]) {
+                display.innerText = "選択中: " + input.files[0].name;
+                display.classList.add('text-blue-600', 'font-bold');
             }
+        }
+
+        // --- 銘柄選択時のデータ取得処理 ---
+        async function loadStockInfo(code) {
+            // プルダウンで空（あるいは最初の選択）なら何もしないか、クリアする
+            if (!code) return;
+
+            // 1. 判定用フォームにコードを入れる
+            document.getElementById('judge_code').value = code;
 
             try {
+                // APIからデータ取得
                 const response = await fetch(`/get_stock/${code}`);
                 if (response.ok) {
                     const data = await response.json();
-                    // 登録フォームへの反映
+                    
+                    // 2. モーダル内のフォームにも値をセットしておく
+                    // (ユーザーが「編集」ボタンを押したときにすぐ編集できるように)
                     document.getElementById('reg_code').value = code;
                     document.getElementById('reg_name').value = data.name || "";
                     document.getElementById('reg_memo').value = data.memo || "";
                     
-                    // 日足画像の有無を表示
-                    const statusElem = document.getElementById('daily_chart_status');
+                    // 3. 日足画像の有無を表示 (判定画面用)
+                    const indicator = document.getElementById('daily_chart_indicator');
+                    const modalStatus = document.getElementById('modal_daily_status');
+
                     if (data.has_daily_chart) {
-                        statusElem.innerText = "✅ 登録済みの日足画像があります（上書き可能）";
-                        statusElem.classList.remove('text-blue-500');
-                        statusElem.classList.add('text-green-600', 'font-bold');
+                        indicator.innerText = "✅ 日足チャート: 登録済み (AI判定に使用します)";
+                        indicator.classList.remove('bg-gray-50', 'text-gray-400');
+                        indicator.classList.add('bg-green-100', 'text-green-700', 'font-bold');
+                        
+                        modalStatus.innerText = "✅ 現在、日足画像が登録されています（上書き可能）";
                     } else {
-                        statusElem.innerText = "⚠️ 日足画像は未登録です";
-                        statusElem.classList.remove('text-green-600', 'font-bold');
-                        statusElem.classList.add('text-blue-500');
+                        indicator.innerText = "⚠️ 日足チャート: 未登録 (判定精度が下がります)";
+                        indicator.classList.remove('bg-green-100', 'text-green-700', 'font-bold');
+                        indicator.classList.add('bg-gray-50', 'text-gray-400');
+                        
+                        modalStatus.innerText = "※まだ画像がありません";
                     }
 
-                    // 判定フォームへのコード反映
-                    document.getElementById('judge_code').value = code;
                 }
             } catch (e) {
                 console.error("データ取得エラー", e);
             }
         }
+
+        // ページ読み込み時、もしプルダウンに値が入っていれば自動ロード（リロード対策）
+        window.addEventListener('DOMContentLoaded', () => {
+            const selector = document.getElementById('stockSelector');
+            if(selector.value) {
+                loadStockInfo(selector.value);
+            }
+        });
     </script>
 </body>
 </html>
