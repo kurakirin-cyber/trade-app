@@ -36,7 +36,7 @@
             <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
                 <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
             </h1>
-            <p class="text-xs text-gray-500">v3.1 UI改善版</p>
+            <p class="text-xs text-gray-500">v3.2 編集機能修正版</p>
         </div>
         
         <button onclick="openNewModal()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 md:px-6 rounded-full shadow-lg transition flex items-center gap-2 text-sm md:text-base">
@@ -55,7 +55,7 @@
                     <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
                 {% endfor %}
             </select>
-            <button onclick="openEditModal()" class="whitespace-nowrap bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
+            <button type="button" onclick="openEditModal()" class="whitespace-nowrap bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition border border-gray-300">
                 📝 編集
             </button>
         </div>
@@ -190,17 +190,18 @@
     </div>
 
     <script>
+        // モーダル表示処理
         function openModal() {
             const modal = document.getElementById('envModal');
             modal.classList.remove('opacity-0', 'pointer-events-none');
             document.body.classList.add('modal-active');
         }
 
-        // 新規登録：フォームを真っ白にしてから開く
+        // 新規登録：フォームをクリアして開く
         function openNewModal() {
             document.getElementById('modalTitle').innerText = "✨ 新規銘柄の登録";
             
-            // 入力欄をクリア
+            // フォームの値をリセット
             document.getElementById('reg_code').value = "";
             document.getElementById('reg_name').value = "";
             document.getElementById('reg_holding_qty').value = "0";
@@ -212,20 +213,27 @@
             document.getElementById('reg_daily_chart').value = "";
             document.getElementById('reg_financial_file').value = "";
 
-            // ステータス表示も初期化
+            // ステータス表示の初期化
             document.getElementById('modal_daily_status').innerText = "※新規登録";
             
             openModal();
         }
 
-        // 編集：今のデータを保持したまま開く
-        function openEditModal() {
-            const currentCode = document.getElementById('reg_code').value;
-            if(!currentCode) {
-                alert("編集する銘柄を選んでな！");
+        // 編集：現在選択中の銘柄情報を確実にロードして開く
+        async function openEditModal() {
+            const selector = document.getElementById('stockSelector');
+            const code = selector.value;
+            
+            if(!code) {
+                alert("編集する銘柄を選んでな！リストが空か、選択されてへんで。");
                 return;
             }
-            document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
+            
+            // ★ここが修正ポイント：編集ボタンを押した時、念のためデータを再ロードしてフォームに入れる
+            // これで「新規」を押した後に「編集」を押しても、空っぽにならずに済む
+            await loadStockInfo(code);
+            
+            document.getElementById('modalTitle').innerText = "📝 " + code + " の編集";
             openModal();
         }
 
@@ -251,6 +259,7 @@
             }
         }
 
+        // サーバーから銘柄情報を取得して画面とモーダルに反映する関数
         async function loadStockInfo(code) {
             if (!code) return;
             document.getElementById('judge_code').value = code;
@@ -260,12 +269,14 @@
                 if (response.ok) {
                     const data = await response.json();
                     
+                    // モーダル（編集画面）の中身を埋める
                     document.getElementById('reg_code').value = code;
                     document.getElementById('reg_name').value = data.name || "";
                     document.getElementById('reg_memo').value = data.memo || "";
                     document.getElementById('reg_holding_qty').value = data.holding_qty || "0";
                     document.getElementById('reg_avg_cost').value = data.avg_cost || "0";
                     
+                    // 日足チャートの有無表示
                     const indicator = document.getElementById('daily_chart_indicator');
                     const modalStatus = document.getElementById('modal_daily_status');
 
@@ -284,9 +295,12 @@
             }
         }
 
+        // ページ読み込み時に、選択されている銘柄の情報をロードする
         window.addEventListener('DOMContentLoaded', () => {
             const selector = document.getElementById('stockSelector');
-            if(selector.value) loadStockInfo(selector.value);
+            if(selector.value) {
+                loadStockInfo(selector.value);
+            }
         });
     </script>
 </body>
