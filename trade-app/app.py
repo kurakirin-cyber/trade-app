@@ -51,19 +51,52 @@ def base64_to_image(b64_str):
 
 def fetch_url_content(url_text):
     if not url_text: return ""
-    urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
+    
+    # URLリストを作成（空行を除去）
+    raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
     combined_text = ""
-    for url in urls:
+    
+    # ちゃんとブラウザのフリをするためのヘッダー
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'ja,en-US;q=0.9,en;q=0.8',
+        'Referer': 'https://www.google.com/'
+    }
+
+    for url in raw_urls:
+        # 【重要】URLの「?」以降（トラッキング情報）をカットする
+        clean_url = url.split('?')[0]
+        
         try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            resp = requests.get(url, headers=headers, timeout=5)
+            resp = requests.get(clean_url, headers=headers, timeout=10)
+            
             if resp.status_code == 200:
+                # 文字コードを自動判定して文字化けを防ぐ
+                resp.encoding = resp.apparent_encoding
+                
                 soup = BeautifulSoup(resp.content, 'html.parser')
-                text = ' '.join([p.text for p in soup.find_all(['p', 'h1', 'h2'])])
-                clean_text = " ".join(text.split())
-                combined_text += f"\n[URL: {url}] {clean_text[:500]}..." 
+                
+                # 本文っぽいところを探す（株探とかニュースサイト向け）
+                # 'article_body' や 'main' などのクラスを優先的に探す
+                main_content = soup.find('div', class_='article_body') or \
+                               soup.find('div', class_='body') or \
+                               soup.find('main') or \
+                               soup
+                
+                # テキストを抽出
+                text = ' '.join([p.text for p in main_content.find_all(['p', 'h1', 'h2', 'div'])])
+                
+                # 余計な空白を削除して、長すぎないように1000文字でカット
+                clean_text = " ".join(text.split())[:1000]
+                combined_text += f"\n[URL: {clean_url}] {clean_text}..." 
+            else:
+                combined_text += f"\n[アクセス不可: {clean_url} (Status: {resp.status_code})]"
+                
         except Exception as e:
-            combined_text += f"\n[エラー: {url}]"
+            print(f"Scraping error for {clean_url}: {e}")
+            combined_text += f"\n[エラー: {clean_url}]"
+            
     return combined_text
 
 def summarize_financial_file(file_storage):
@@ -87,7 +120,7 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 修正箇所: is not None を追加
+    # 接続確認
     if collection is not None:
         cursor = collection.find({})
         for doc in cursor:
@@ -101,7 +134,6 @@ def index():
 def get_stock(code_id):
     """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
-    # 修正箇所: is None を追加
     if collection is None:
         return jsonify({}), 500
 
@@ -124,7 +156,6 @@ def register_stock():
     """銘柄情報の登録・更新"""
     try:
         collection = get_db_collection()
-        # 修正箇所: is None を追加
         if collection is None:
             flash('DB接続エラー', 'error')
             return redirect(url_for('index'))
@@ -160,7 +191,12 @@ def register_stock():
         url_mode = request.form.get('news_mode', 'append')
         new_urls = request.form.get('reg_urls')
         if new_urls:
+            # ここで fetch_url_content を呼ぶ（内部でURL掃除してる）
             scraped_text = fetch_url_content(new_urls)
+            
+            # 保存するURLリストも、念のため掃除したものを保存しておくと綺麗やけど
+            # ここでは入力されたものをそのまま保存しつつ、次回読み込みで掃除されるようにする
+            
             if url_mode == 'overwrite':
                 update_data['news_text'] = scraped_text
                 update_data['saved_urls'] = new_urls
@@ -190,7 +226,7 @@ def register_stock():
         flash(f'銘柄 {code} を保存したで！', 'success')
         
     except Exception as e:
-        print(e)
+        print(f"Register Error: {e}")
         flash(f'登録エラー: {e}', 'error')
 
     return redirect(url_for('index'))
@@ -215,7 +251,6 @@ def judge():
 
         collection = get_db_collection()
         env_data = {}
-        # 修正箇所: is not None を追加
         if collection is not None:
             env_data = collection.find_one({"code": code}) or {}
         
@@ -290,7 +325,6 @@ def judge():
         result_html = response.text.replace('```html', '').replace('```', '')
         
         stocks_data = {}
-        # 修正箇所: is not None を追加
         if collection is not None:
             cursor = collection.find({})
             for doc in cursor:
