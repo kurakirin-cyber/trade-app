@@ -90,7 +90,7 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 【修正箇所】ここを is not None に変更
+    # 【ここが重要！】 is not None をつける！
     if collection is not None:
         # 全件取得
         cursor = collection.find({})
@@ -105,7 +105,8 @@ def index():
 def get_stock(code_id):
     """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
-    # 【修正箇所】ここも is None に変更
+    
+    # 【ここも変更！】
     if collection is None:
         return jsonify({}), 500
 
@@ -128,7 +129,8 @@ def register_stock():
     """銘柄情報の登録・更新 (MongoDB版)"""
     try:
         collection = get_db_collection()
-        # 【修正箇所】ここも変更
+        
+        # 【ここも変更！】
         if collection is None:
             flash('データベースに接続できへんかった...設定確認してな', 'error')
             return redirect(url_for('index'))
@@ -228,7 +230,8 @@ def judge():
         # DBから情報取得
         collection = get_db_collection()
         env_data = {}
-        # 【修正箇所】ここも is not None に変更
+        
+        # 【ここも変更！】
         if collection is not None:
             env_data = collection.find_one({"code": code}) or {}
         
@@ -286,7 +289,8 @@ def judge():
         
         # テンプレートに渡すデータを用意
         stocks_data = {}
-        # 【修正箇所】ここも is not None に変更
+        
+        # 【ここも変更！】
         if collection is not None:
             cursor = collection.find({})
             for doc in cursor:
