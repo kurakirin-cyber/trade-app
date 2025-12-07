@@ -41,11 +41,15 @@ def get_db_collection():
         print(f"MongoDB接続エラー: {e}")
         return None
 
-# --- 画像処理系 ---
+# --- 画像処理系 (軽量化版) ---
 def image_to_base64(img):
-    img.thumbnail((1024, 1024)) 
+    # エラー防止＆軽量化のためにRGB変換
+    img = img.convert('RGB')
+    # サイズを縮小 (1024 -> 800) これでメモリ消費激減
+    img.thumbnail((800, 800)) 
     buffered = io.BytesIO()
-    img.save(buffered, format="JPEG")
+    # 画質を少し落として圧縮 (quality=60)
+    img.save(buffered, format="JPEG", quality=60)
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def base64_to_image(b64_str):
@@ -90,7 +94,6 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 【ここが重要！】 is not None をつける！
     if collection is not None:
         # 全件取得
         cursor = collection.find({})
@@ -105,8 +108,6 @@ def index():
 def get_stock(code_id):
     """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
-    
-    # 【ここも変更！】
     if collection is None:
         return jsonify({}), 500
 
@@ -129,8 +130,6 @@ def register_stock():
     """銘柄情報の登録・更新 (MongoDB版)"""
     try:
         collection = get_db_collection()
-        
-        # 【ここも変更！】
         if collection is None:
             flash('データベースに接続できへんかった...設定確認してな', 'error')
             return redirect(url_for('index'))
@@ -230,8 +229,6 @@ def judge():
         # DBから情報取得
         collection = get_db_collection()
         env_data = {}
-        
-        # 【ここも変更！】
         if collection is not None:
             env_data = collection.find_one({"code": code}) or {}
         
@@ -251,16 +248,21 @@ def judge():
 
         # 画像リスト
         images_to_pass = []
-        img_5min = PIL.Image.open(chart_file)
+        
+        # メモリ節約のため、ここでもリサイズしてから渡す
+        img_5min = PIL.Image.open(chart_file).convert('RGB')
+        img_5min.thumbnail((800, 800))
         images_to_pass.append(img_5min)
         
-        img_board = PIL.Image.open(board_file)
+        img_board = PIL.Image.open(board_file).convert('RGB')
+        img_board.thumbnail((800, 800))
         images_to_pass.append(img_board)
 
         daily_chart_b64 = env_data.get('daily_chart_b64')
         daily_chart_status = "なし"
         if daily_chart_b64:
-            img_daily = base64_to_image(daily_chart_b64)
+            img_daily = base64_to_image(daily_chart_b64).convert('RGB')
+            img_daily.thumbnail((800, 800))
             images_to_pass.append(img_daily)
             daily_chart_status = "あり（画像3枚目）"
 
@@ -289,8 +291,6 @@ def judge():
         
         # テンプレートに渡すデータを用意
         stocks_data = {}
-        
-        # 【ここも変更！】
         if collection is not None:
             cursor = collection.find({})
             for doc in cursor:
