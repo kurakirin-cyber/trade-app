@@ -21,7 +21,7 @@ if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
 # モデル設定
-model = genai.GenerativeModel('gemini-2.0-flash-exp') # 最新モデルに変更（もしエラーなら1.5-flashに戻して）
+model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
 # --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
@@ -87,7 +87,8 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    if collection:
+    # 修正箇所: is not None を追加
+    if collection is not None:
         cursor = collection.find({})
         for doc in cursor:
             code = doc.get('code')
@@ -100,19 +101,18 @@ def index():
 def get_stock(code_id):
     """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
-    if not collection:
+    # 修正箇所: is None を追加
+    if collection is None:
         return jsonify({}), 500
 
     data = collection.find_one({"code": code_id})
     if data:
         response_data = {k: v for k, v in data.items() if k != '_id'}
         
-        # 画像有無フラグ
         response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
         if 'daily_chart_b64' in response_data:
             del response_data['daily_chart_b64']
         
-        # 決算情報有無フラグ（テキストがあるかどうかで判定）
         response_data['has_financial_info'] = bool(response_data.get('financial_text'))
             
         return jsonify(response_data)
@@ -124,7 +124,8 @@ def register_stock():
     """銘柄情報の登録・更新"""
     try:
         collection = get_db_collection()
-        if not collection:
+        # 修正箇所: is None を追加
+        if collection is None:
             flash('DB接続エラー', 'error')
             return redirect(url_for('index'))
             
@@ -142,7 +143,7 @@ def register_stock():
             "name": name if name else existing_data.get('name', ''),
             "memo": existing_data.get('memo', ''),
             "news_text": existing_data.get('news_text', ''),
-            "saved_urls": existing_data.get('saved_urls', ''), # URLリストも保存
+            "saved_urls": existing_data.get('saved_urls', ''),
             "financial_text": existing_data.get('financial_text', ''),
             "daily_chart_b64": existing_data.get('daily_chart_b64', None),
             "holding_qty": request.form.get('reg_holding_qty', '0'),
@@ -162,7 +163,7 @@ def register_stock():
             scraped_text = fetch_url_content(new_urls)
             if url_mode == 'overwrite':
                 update_data['news_text'] = scraped_text
-                update_data['saved_urls'] = new_urls # URLも上書き
+                update_data['saved_urls'] = new_urls
             else:
                 current_news = update_data['news_text']
                 current_urls = update_data['saved_urls']
@@ -214,13 +215,13 @@ def judge():
 
         collection = get_db_collection()
         env_data = {}
-        if collection:
+        # 修正箇所: is not None を追加
+        if collection is not None:
             env_data = collection.find_one({"code": code}) or {}
         
         qty = env_data.get('holding_qty', '0')
         cost = env_data.get('avg_cost', '0')
         
-        # 日足画像の処理
         daily_chart_b64 = env_data.get('daily_chart_b64')
         images_to_pass = [PIL.Image.open(chart_file), PIL.Image.open(board_file)]
         daily_status = "なし"
@@ -289,7 +290,8 @@ def judge():
         result_html = response.text.replace('```html', '').replace('```', '')
         
         stocks_data = {}
-        if collection:
+        # 修正箇所: is not None を追加
+        if collection is not None:
             cursor = collection.find({})
             for doc in cursor:
                 c = doc.get('code')
