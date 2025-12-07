@@ -36,24 +36,29 @@
             <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
                 <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
             </h1>
-            <p class="text-xs text-gray-500">v3.0 データ保存＆PDF対応版</p>
+            <p class="text-xs text-gray-500">v3.1 UI改善版</p>
         </div>
         
-        <button onclick="openModal()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-full shadow-lg transition flex items-center gap-2">
-            <span>📝 銘柄情報を登録・編集</span>
+        <button onclick="openNewModal()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 md:px-6 rounded-full shadow-lg transition flex items-center gap-2 text-sm md:text-base">
+            <span>✨ 新規銘柄を追加</span>
         </button>
     </header>
 
-    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6 flex flex-col md:flex-row items-center gap-4">
-        <label class="font-bold whitespace-nowrap text-gray-700">登録済み銘柄を呼び出す:</label>
-        <select id="stockSelector" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-lg font-bold" onchange="loadStockInfo(this.value)">
-            {% if not registered_envs %}
-                <option value="">(登録された銘柄はありません)</option>
-            {% endif %}
-            {% for code, data in registered_envs.items() %}
-                <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
-            {% endfor %}
-        </select>
+    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6">
+        <label class="font-bold whitespace-nowrap text-gray-700 block mb-2">登録済み銘柄を呼び出す:</label>
+        <div class="flex gap-2">
+            <select id="stockSelector" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-lg font-bold" onchange="loadStockInfo(this.value)">
+                {% if not registered_envs %}
+                    <option value="">(登録された銘柄はありません)</option>
+                {% endif %}
+                {% for code, data in registered_envs.items() %}
+                    <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="openEditModal()" class="whitespace-nowrap bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-2 px-4 rounded-lg transition">
+                📝 編集
+            </button>
+        </div>
     </section>
 
     <section class="bg-white rounded-xl p-6 shadow-sm border border-red-200 mb-8">
@@ -118,7 +123,7 @@
         <div class="modal-container bg-white w-11/12 md:max-w-3xl mx-auto rounded-xl shadow-2xl z-50 overflow-y-auto max-h-[90vh]">
             <div class="modal-content py-4 text-left px-6">
                 <div class="flex justify-between items-center pb-3 border-b mb-4">
-                    <p class="text-2xl font-bold text-green-700">📝 環境情報の登録・更新</p>
+                    <p class="text-2xl font-bold text-green-700" id="modalTitle">📝 環境情報の登録・更新</p>
                     <div class="modal-close cursor-pointer z-50" onclick="closeModal()">✖</div>
                 </div>
 
@@ -147,13 +152,13 @@
 
                     <div class="bg-green-50 p-3 rounded border border-green-100">
                         <label class="block text-xs font-bold text-green-800 mb-1">① 日足チャート (画像)</label>
-                        <input type="file" name="reg_daily_chart" accept="image/*" class="text-xs w-full text-gray-600">
+                        <input type="file" name="reg_daily_chart" id="reg_daily_chart" accept="image/*" class="text-xs w-full text-gray-600">
                         <p class="text-xs text-green-600 mt-1 font-bold" id="modal_daily_status">※アップロードで上書き保存</p>
                     </div>
 
                     <div class="bg-gray-50 p-3 rounded border border-gray-100">
                         <label class="block text-xs font-bold text-gray-500 mb-1">② 決算書・適時開示 (PDF または 画像)</label>
-                        <input type="file" name="reg_financial_file" accept="image/*,.pdf" class="text-xs w-full text-gray-600">
+                        <input type="file" name="reg_financial_file" id="reg_financial_file" accept="image/*,.pdf" class="text-xs w-full text-gray-600">
                         <div class="flex gap-4 mt-2 text-xs">
                             <label class="flex items-center"><input type="radio" name="financial_mode" value="append" checked class="mr-1"> 追加保存</label>
                             <label class="flex items-center"><input type="radio" name="financial_mode" value="overwrite" class="mr-1"> 全上書き</label>
@@ -163,7 +168,7 @@
 
                     <div>
                         <label class="block text-xs font-bold text-gray-500 mb-1">③ 参考ニュースURL</label>
-                        <textarea name="reg_urls" placeholder="http://..." class="w-full border p-2 rounded h-16 text-xs"></textarea>
+                        <textarea name="reg_urls" id="reg_urls" placeholder="http://..." class="w-full border p-2 rounded h-16 text-xs"></textarea>
                         <div class="flex gap-4 mt-1 text-xs text-gray-600">
                             <label class="flex items-center"><input type="radio" name="news_mode" value="append" checked class="mr-1"> 追加保存</label>
                             <label class="flex items-center"><input type="radio" name="news_mode" value="overwrite" class="mr-1"> 全上書き</label>
@@ -189,6 +194,39 @@
             const modal = document.getElementById('envModal');
             modal.classList.remove('opacity-0', 'pointer-events-none');
             document.body.classList.add('modal-active');
+        }
+
+        // 新規登録：フォームを真っ白にしてから開く
+        function openNewModal() {
+            document.getElementById('modalTitle').innerText = "✨ 新規銘柄の登録";
+            
+            // 入力欄をクリア
+            document.getElementById('reg_code').value = "";
+            document.getElementById('reg_name').value = "";
+            document.getElementById('reg_holding_qty').value = "0";
+            document.getElementById('reg_avg_cost').value = "0";
+            document.getElementById('reg_memo').value = "";
+            document.getElementById('reg_urls').value = "";
+            
+            // ファイル入力もリセット
+            document.getElementById('reg_daily_chart').value = "";
+            document.getElementById('reg_financial_file').value = "";
+
+            // ステータス表示も初期化
+            document.getElementById('modal_daily_status').innerText = "※新規登録";
+            
+            openModal();
+        }
+
+        // 編集：今のデータを保持したまま開く
+        function openEditModal() {
+            const currentCode = document.getElementById('reg_code').value;
+            if(!currentCode) {
+                alert("編集する銘柄を選んでな！");
+                return;
+            }
+            document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
+            openModal();
         }
 
         function closeModal() {
