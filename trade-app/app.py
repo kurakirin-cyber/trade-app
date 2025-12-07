@@ -20,8 +20,8 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
-# モデル設定
-model = genai.GenerativeModel('gemini-2.0-flash-exp')
+# 【修正箇所】安定版の1.5-flashに変更（制限エラー対策）
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
@@ -65,7 +65,7 @@ def fetch_url_content(url_text):
     }
 
     for url in raw_urls:
-        # 【重要】URLの「?」以降（トラッキング情報）をカットする
+        # URLの「?」以降（トラッキング情報）をカットする
         clean_url = url.split('?')[0]
         
         try:
@@ -77,8 +77,7 @@ def fetch_url_content(url_text):
                 
                 soup = BeautifulSoup(resp.content, 'html.parser')
                 
-                # 本文っぽいところを探す（株探とかニュースサイト向け）
-                # 'article_body' や 'main' などのクラスを優先的に探す
+                # 本文っぽいところを探す
                 main_content = soup.find('div', class_='article_body') or \
                                soup.find('div', class_='body') or \
                                soup.find('main') or \
@@ -193,9 +192,6 @@ def register_stock():
         if new_urls:
             # ここで fetch_url_content を呼ぶ（内部でURL掃除してる）
             scraped_text = fetch_url_content(new_urls)
-            
-            # 保存するURLリストも、念のため掃除したものを保存しておくと綺麗やけど
-            # ここでは入力されたものをそのまま保存しつつ、次回読み込みで掃除されるようにする
             
             if url_mode == 'overwrite':
                 update_data['news_text'] = scraped_text
