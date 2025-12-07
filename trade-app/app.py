@@ -21,35 +21,29 @@ if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
 # モデル設定
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel('gemini-2.0-flash-exp') # 最新モデルに変更（もしエラーなら1.5-flashに戻して）
 
 # --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
 
-# DB接続関数
 def get_db_collection():
     if not MONGO_URI:
-        print("【警告】MONGO_URIが設定されてへんで！データ保存できへんよ！")
+        print("【警告】MONGO_URIが設定されてへんで！")
         return None
     try:
-        # 接続開始
         client = MongoClient(MONGO_URI)
-        db = client['stock_app_db']  # データベース名
-        collection = db['stocks']    # コレクション名
+        db = client['stock_app_db']
+        collection = db['stocks']
         return collection
     except Exception as e:
         print(f"MongoDB接続エラー: {e}")
         return None
 
-# --- 画像処理系 (軽量化版) ---
+# --- 画像処理系 ---
 def image_to_base64(img):
-    # エラー防止＆軽量化のためにRGB変換
-    img = img.convert('RGB')
-    # サイズを縮小 (1024 -> 800) これでメモリ消費激減
-    img.thumbnail((800, 800)) 
+    img.thumbnail((1024, 1024)) 
     buffered = io.BytesIO()
-    # 画質を少し落として圧縮 (quality=60)
-    img.save(buffered, format="JPEG", quality=60)
+    img.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def base64_to_image(b64_str):
@@ -90,12 +84,10 @@ def summarize_financial_file(file_storage):
 
 @app.route('/')
 def index():
-    # MongoDBから全データを取得して辞書形式に変換
     stocks_data = {}
     collection = get_db_collection()
     
-    if collection is not None:
-        # 全件取得
+    if collection:
         cursor = collection.find({})
         for doc in cursor:
             code = doc.get('code')
@@ -108,18 +100,20 @@ def index():
 def get_stock(code_id):
     """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
-    if collection is None:
+    if not collection:
         return jsonify({}), 500
 
     data = collection.find_one({"code": code_id})
     if data:
-        # ObjectIdなどJSON化できないものを除外するためにコピー作成
         response_data = {k: v for k, v in data.items() if k != '_id'}
         
-        # 画像データは重いので有無フラグだけ返す
+        # 画像有無フラグ
         response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
         if 'daily_chart_b64' in response_data:
             del response_data['daily_chart_b64']
+        
+        # 決算情報有無フラグ（テキストがあるかどうかで判定）
+        response_data['has_financial_info'] = bool(response_data.get('financial_text'))
             
         return jsonify(response_data)
     
@@ -127,37 +121,32 @@ def get_stock(code_id):
 
 @app.route('/register_stock', methods=['POST'])
 def register_stock():
-    """銘柄情報の登録・更新 (MongoDB版)"""
+    """銘柄情報の登録・更新"""
     try:
         collection = get_db_collection()
-        if collection is None:
-            flash('データベースに接続できへんかった...設定確認してな', 'error')
+        if not collection:
+            flash('DB接続エラー', 'error')
             return redirect(url_for('index'))
             
         code = request.form.get('reg_code')
         name = request.form.get('reg_name')
         
-        # 保有情報
-        holding_qty = request.form.get('reg_holding_qty', '0')
-        avg_cost = request.form.get('reg_avg_cost', '0')
-
         if not code:
             flash('銘柄コードは必須やで！', 'error')
             return redirect(url_for('index'))
 
-        # DBから既存データを取得、なければ初期値
         existing_data = collection.find_one({"code": code}) or {}
         
-        # 更新用データを作成 (既存データをベースに)
         update_data = {
-            "code": code, # キーとして保存
+            "code": code,
             "name": name if name else existing_data.get('name', ''),
             "memo": existing_data.get('memo', ''),
             "news_text": existing_data.get('news_text', ''),
+            "saved_urls": existing_data.get('saved_urls', ''), # URLリストも保存
             "financial_text": existing_data.get('financial_text', ''),
             "daily_chart_b64": existing_data.get('daily_chart_b64', None),
-            "holding_qty": holding_qty,
-            "avg_cost": avg_cost
+            "holding_qty": request.form.get('reg_holding_qty', '0'),
+            "avg_cost": request.form.get('reg_avg_cost', '0')
         }
 
         # 1. 日足チャート
@@ -173,9 +162,12 @@ def register_stock():
             scraped_text = fetch_url_content(new_urls)
             if url_mode == 'overwrite':
                 update_data['news_text'] = scraped_text
+                update_data['saved_urls'] = new_urls # URLも上書き
             else:
-                current = update_data['news_text']
-                update_data['news_text'] = (current + "\n" + scraped_text) if current else scraped_text
+                current_news = update_data['news_text']
+                current_urls = update_data['saved_urls']
+                update_data['news_text'] = (current_news + "\n" + scraped_text) if current_news else scraped_text
+                update_data['saved_urls'] = (current_urls + "\n" + new_urls) if current_urls else new_urls
 
         # 3. 決算書
         financial_mode = request.form.get('financial_mode', 'append')
@@ -193,14 +185,8 @@ def register_stock():
         if new_memo:
             update_data['memo'] = new_memo
 
-        # MongoDBに保存 (なければ挿入、あれば更新: upsert=True)
-        collection.update_one(
-            {"code": code},
-            {"$set": update_data},
-            upsert=True
-        )
-        
-        flash(f'銘柄 {code} ({update_data["name"]}) の情報をクラウドDBに保存したで！', 'success')
+        collection.update_one({"code": code}, {"$set": update_data}, upsert=True)
+        flash(f'銘柄 {code} を保存したで！', 'success')
         
     except Exception as e:
         print(e)
@@ -226,72 +212,84 @@ def judge():
             flash('5分足と板画像は必須やで！', 'error')
             return redirect(url_for('index'))
 
-        # DBから情報取得
         collection = get_db_collection()
         env_data = {}
-        if collection is not None:
+        if collection:
             env_data = collection.find_one({"code": code}) or {}
         
-        # 保有状況
         qty = env_data.get('holding_qty', '0')
         cost = env_data.get('avg_cost', '0')
-        holding_status = f"【現在の保有状況】保有数: {qty}株 / 平均取得単価: {cost}円"
-
-        env_text = f"""
-        [事前登録情報]
-        銘柄名: {env_data.get('name', '不明')}
-        {holding_status}
-        メモ: {env_data.get('memo', 'なし')}
-        ニュース/URL情報: {env_data.get('news_text', 'なし')}
-        決算/材料の要約: {env_data.get('financial_text', 'なし')}
-        """
-
-        # 画像リスト
-        images_to_pass = []
         
-        # メモリ節約のため、ここでもリサイズしてから渡す
-        img_5min = PIL.Image.open(chart_file).convert('RGB')
-        img_5min.thumbnail((800, 800))
-        images_to_pass.append(img_5min)
-        
-        img_board = PIL.Image.open(board_file).convert('RGB')
-        img_board.thumbnail((800, 800))
-        images_to_pass.append(img_board)
-
+        # 日足画像の処理
         daily_chart_b64 = env_data.get('daily_chart_b64')
-        daily_chart_status = "なし"
+        images_to_pass = [PIL.Image.open(chart_file), PIL.Image.open(board_file)]
+        daily_status = "なし"
+        
         if daily_chart_b64:
-            img_daily = base64_to_image(daily_chart_b64).convert('RGB')
-            img_daily.thumbnail((800, 800))
-            images_to_pass.append(img_daily)
-            daily_chart_status = "あり（画像3枚目）"
+            images_to_pass.append(base64_to_image(daily_chart_b64))
+            daily_status = "あり（画像3枚目）"
 
         prompt = f"""
-        あなたはデイトレーダーです。以下の情報を統合し**HTML**で判断を出力してください。
+        あなたはプロのデイトレーダーです。以下の情報を統合し、現在の局面における最適な売買判断を下してください。
         
-        【入力画像】
-        1枚目: 5分足チャート（短期トレンド）
-        2枚目: 板情報（需給）
-        3枚目: 日足チャート（環境認識） ※もしあれば
+        【ユーザーの保有状況】
+        保有数: {qty}株
+        平均取得単価: {cost}円
+        
+        【環境認識データ】
+        銘柄名: {env_data.get('name', '不明')} ({code})
+        事前メモ: {env_data.get('memo', 'なし')}
+        ニュース要約: {env_data.get('news_text', 'なし')}
+        決算/材料要約: {env_data.get('financial_text', 'なし')}
+        日足チャート: {daily_status}
 
-        【テキスト情報】
+        【今回入力された情報】
+        画像1: 5分足チャート（短期トレンド）
+        画像2: 板情報（直近の需給）
         補足メモ: {extra_note}
-        日足画像の有無: {daily_chart_status}
-        {env_text}
 
         【指示】
-        - ユーザーは現在 **「{qty}株」を「{cost}円」** で保有しています。この取得単価と比較して、現在は含み益か含み損かを考慮し、「ナンピンすべきか」「損切りすべきか」「利確すべきか」「買い増すべきか」を明確にアドバイスしてください。
-        - 決算情報や日足を考慮し、5分足のエントリー根拠を補強してください。
-        - 出力は <div class="p-4 bg-gray-50 rounded-lg"> で囲み、<h3>で結論(BUY/SELL/WAIT)、<ul>で数値目標、<p>で根拠を記述。
-        - 関西弁で。
+        出力は以下のHTML形式のみで行ってください。余計なマークダウン（```htmlなど）は不要です。
+        関西弁で親しみやすく、かつ論理的に記述してください。
+
+        <div class="p-6 bg-white border-2 border-indigo-100 rounded-xl shadow-sm">
+            <div class="flex items-center justify-between mb-4 border-b pb-2">
+                <span class="text-gray-500 font-bold text-sm">AIジャッジ</span>
+                <span class="text-2xl font-black px-4 py-1 rounded bg-gray-800 text-white">
+                    {{ここに結論を入れる： 買い / 売り / ホールド / 様子見}}
+                </span>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-4 mb-4">
+                <div class="bg-blue-50 p-3 rounded text-center">
+                    <p class="text-xs text-blue-800 font-bold mb-1">🎯 ターゲット価格</p>
+                    <p class="text-lg font-bold text-blue-900">{{利確目標価格}} 円</p>
+                </div>
+                <div class="bg-red-50 p-3 rounded text-center">
+                    <p class="text-xs text-red-800 font-bold mb-1">🛡️ 損切りライン</p>
+                    <p class="text-lg font-bold text-red-900">{{損切り価格}} 円</p>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                 <h4 class="font-bold text-gray-700 mb-2">💡 エントリー/アクション範囲</h4>
+                 <p class="text-lg font-bold text-indigo-700 bg-indigo-50 p-2 rounded text-center">
+                    {{具体的な価格帯：例 1000円〜1005円で拾う}}
+                 </p>
+            </div>
+
+            <div class="space-y-2 text-sm text-gray-700 leading-relaxed">
+                <p><strong>根拠：</strong> {{5分足と板読みからの具体的な根拠を記述}}</p>
+                <p><strong>環境認識：</strong> {{日足や材料を考慮した背景情報を記述}}</p>
+            </div>
+        </div>
         """
 
         response = model.generate_content([prompt] + images_to_pass)
         result_html = response.text.replace('```html', '').replace('```', '')
         
-        # テンプレートに渡すデータを用意
         stocks_data = {}
-        if collection is not None:
+        if collection:
             cursor = collection.find({})
             for doc in cursor:
                 c = doc.get('code')
