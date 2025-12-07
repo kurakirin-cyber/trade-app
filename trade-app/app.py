@@ -20,8 +20,8 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
-# 【修正箇所】安定版の1.5-flashに変更（制限エラー対策）
-model = genai.GenerativeModel('gemini-1.5-flash')
+# 【修正箇所】バージョン番号付きの正確な名前に変更
+model = genai.GenerativeModel('gemini-1.5-flash-002')
 
 # --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
@@ -119,7 +119,6 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 接続確認
     if collection is not None:
         cursor = collection.find({})
         for doc in cursor:
@@ -190,9 +189,7 @@ def register_stock():
         url_mode = request.form.get('news_mode', 'append')
         new_urls = request.form.get('reg_urls')
         if new_urls:
-            # ここで fetch_url_content を呼ぶ（内部でURL掃除してる）
             scraped_text = fetch_url_content(new_urls)
-            
             if url_mode == 'overwrite':
                 update_data['news_text'] = scraped_text
                 update_data['saved_urls'] = new_urls
