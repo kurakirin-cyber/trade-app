@@ -39,7 +39,7 @@
             <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
                 <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
             </h1>
-            <p class="text-xs text-gray-500">v3.4 完全動作版</p>
+            <p class="text-xs text-gray-500">v3.5 完全動作版</p>
         </div>
         
         <button onclick="openNewModal()" class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition flex justify-center items-center gap-2">
@@ -236,14 +236,13 @@
             openModal();
         }
 
-        // 編集モード（ここが大事！）
+        // 編集モード
         function openEditModal() {
             const currentCode = document.getElementById('reg_code').value;
             if(!currentCode) {
                 // セレクトボックスの値を取得し直す
                 const selector = document.getElementById('stockSelector');
                 if (selector.value) {
-                    // まだロードされてない場合のためにロードしてから開く
                     loadStockInfo(selector.value).then(() => {
                          document.getElementById('modalTitle').innerText = "📝 " + selector.value + " の編集";
                          openModal();
