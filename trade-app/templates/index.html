@@ -39,7 +39,7 @@
             <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
                 <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
             </h1>
-            <p class="text-xs text-gray-500">v3.3 完全修正版</p>
+            <p class="text-xs text-gray-500">v3.4 完全動作版</p>
         </div>
         
         <button onclick="openNewModal()" class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition flex justify-center items-center gap-2">
@@ -236,10 +236,20 @@
             openModal();
         }
 
-        // 編集モード
+        // 編集モード（ここが大事！）
         function openEditModal() {
             const currentCode = document.getElementById('reg_code').value;
             if(!currentCode) {
+                // セレクトボックスの値を取得し直す
+                const selector = document.getElementById('stockSelector');
+                if (selector.value) {
+                    // まだロードされてない場合のためにロードしてから開く
+                    loadStockInfo(selector.value).then(() => {
+                         document.getElementById('modalTitle').innerText = "📝 " + selector.value + " の編集";
+                         openModal();
+                    });
+                    return;
+                }
                 alert("編集する銘柄をリストから選んでな！");
                 return;
             }
@@ -269,7 +279,6 @@
         // 銘柄情報ロード（非同期）
         async function loadStockInfo(code) {
             if (!code) return;
-            // フォーム側にもコードをセット
             document.getElementById('judge_code').value = code;
 
             try {
@@ -277,7 +286,6 @@
                 if (response.ok) {
                     const data = await response.json();
                     
-                    // 編集フォームに値をセット
                     document.getElementById('reg_code').value = code;
                     document.getElementById('reg_name').value = data.name || "";
                     document.getElementById('reg_memo').value = data.memo || "";
@@ -285,7 +293,6 @@
                     document.getElementById('reg_avg_cost').value = data.avg_cost || "0";
                     document.getElementById('reg_urls').value = data.saved_urls || "";
                     
-                    // 日足チャート状態更新
                     const dailyInd = document.getElementById('daily_chart_indicator');
                     const modalDaily = document.getElementById('modal_daily_status');
                     if (data.has_daily_chart) {
@@ -300,7 +307,6 @@
                         modalDaily.className = "text-xs text-gray-400 mt-2";
                     }
 
-                    // 決算情報状態更新
                     const finInd = document.getElementById('financial_indicator');
                     const modalFin = document.getElementById('modal_financial_status');
                     if (data.has_financial_info) {
@@ -320,7 +326,6 @@
             }
         }
 
-        // ページ読み込み時に初期実行
         window.addEventListener('DOMContentLoaded', () => {
             const selector = document.getElementById('stockSelector');
             if(selector.value) loadStockInfo(selector.value);
