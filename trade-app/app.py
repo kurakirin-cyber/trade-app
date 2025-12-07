@@ -20,22 +20,15 @@ GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
 
-# 【重要】モデルは安定版の「1.5-flash」を使用
-# ※ requirements.txt で google-generativeai>=0.7.2 を指定してないとエラーになるで！
-try:
-    model = genai.GenerativeModel('gemini-1.5-flash')
-except Exception as e:
-    print(f"モデル設定エラー: {e}")
-    # 万が一ダメな場合は古いモデルへ（緊急用）
-    model = genai.GenerativeModel('gemini-pro')
+# ★安定版モデルを指定（requirements.txtの更新必須）
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
 
 def get_db_collection():
-    """データベース接続を確立する関数"""
     if not MONGO_URI:
-        print("【警告】MONGO_URIが設定されてへんで！")
+        # ローカルテスト時などはエラーを出さずにNoneを返す
         return None
     try:
         client = MongoClient(MONGO_URI)
@@ -46,7 +39,7 @@ def get_db_collection():
         print(f"MongoDB接続エラー: {e}")
         return None
 
-# --- 画像処理系 ---
+# --- 画像処理関数 ---
 def image_to_base64(img):
     """画像をBase64文字列に変換"""
     img.thumbnail((1024, 1024)) 
@@ -58,15 +51,15 @@ def base64_to_image(b64_str):
     """Base64文字列を画像に戻す"""
     return PIL.Image.open(io.BytesIO(base64.b64decode(b64_str)))
 
+# --- スクレイピング関数（URL掃除＆ブロック対策強化版） ---
 def fetch_url_content(url_text):
-    """URLからニュース本文を取得・要約する（トラッキング削除機能付き）"""
     if not url_text: return ""
     
     # URLリストを作成（空行を除去）
     raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
     combined_text = ""
     
-    # ちゃんとブラウザのフリをするためのヘッダー（ブロック対策）
+    # ちゃんとブラウザのフリをするためのヘッダー（株探対策）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -74,11 +67,11 @@ def fetch_url_content(url_text):
     }
 
     for url in raw_urls:
-        # 【重要】URLの「?」以降（トラッキング情報）をカットする
+        # URLの「?」以降（トラッキング情報）をカットする
         clean_url = url.split('?')[0]
         
         try:
-            # タイムアウト設定を追加（10秒）
+            # タイムアウトを10秒に設定
             resp = requests.get(clean_url, headers=headers, timeout=10)
             
             if resp.status_code == 200:
@@ -87,11 +80,11 @@ def fetch_url_content(url_text):
                 
                 soup = BeautifulSoup(resp.content, 'html.parser')
                 
-                # ニュースサイトの本文っぽい場所を優先的に探す
+                # 本文っぽいところを優先的に探す
                 main_content = soup.find('div', class_='article_body') or \
                                soup.find('div', class_='body') or \
+                               soup.find('div', class_='main') or \
                                soup.find('main') or \
-                               soup.find('article') or \
                                soup
                 
                 # テキストを抽出
@@ -109,8 +102,8 @@ def fetch_url_content(url_text):
             
     return combined_text
 
+# --- 決算書要約関数 ---
 def summarize_financial_file(file_storage):
-    """決算書（PDF/画像）をAIで要約する"""
     try:
         filename = file_storage.filename
         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -131,7 +124,7 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 接続確認 (is not None が重要！)
+    # 接続確認（Noneチェック必須）
     if collection is not None:
         cursor = collection.find({})
         for doc in cursor:
@@ -153,12 +146,12 @@ def get_stock(code_id):
         # ObjectIdを除外
         response_data = {k: v for k, v in data.items() if k != '_id'}
         
-        # 画像データは重いので有無フラグだけ返す
+        # 画像データの有無フラグ
         response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
         if 'daily_chart_b64' in response_data:
             del response_data['daily_chart_b64']
         
-        # 決算情報の有無
+        # 決算情報の有無フラグ
         response_data['has_financial_info'] = bool(response_data.get('financial_text'))
             
         return jsonify(response_data)
@@ -201,11 +194,11 @@ def register_stock():
             img = PIL.Image.open(daily_chart_file)
             update_data['daily_chart_b64'] = image_to_base64(img)
 
-        # 2. ニュースURL (スクレイピング実行)
+        # 2. ニュースURL
         url_mode = request.form.get('news_mode', 'append')
         new_urls = request.form.get('reg_urls')
         if new_urls:
-            # URLから本文を取得
+            # ここで fetch_url_content を呼ぶ（内部でURL掃除してる）
             scraped_text = fetch_url_content(new_urls)
             
             if url_mode == 'overwrite':
@@ -233,7 +226,6 @@ def register_stock():
         if new_memo:
             update_data['memo'] = new_memo
 
-        # DB保存 (Upsert)
         collection.update_one({"code": code}, {"$set": update_data}, upsert=True)
         flash(f'銘柄 {code} を保存したで！', 'success')
         
@@ -277,7 +269,7 @@ def judge():
             images_to_pass.append(base64_to_image(daily_chart_b64))
             daily_status = "あり（画像3枚目）"
 
-        # AIへの指示プロンプト
+        # AIへの指示プロンプト（ここが短いとアホになるのでフル記述）
         prompt = f"""
         あなたはプロのデイトレーダーです。以下の情報を統合し、現在の局面における最適な売買判断を下してください。
         
@@ -337,7 +329,6 @@ def judge():
         response = model.generate_content([prompt] + images_to_pass)
         result_html = response.text.replace('```html', '').replace('```', '')
         
-        # 画面下部にリストを表示するために再取得
         stocks_data = {}
         if collection is not None:
             cursor = collection.find({})
