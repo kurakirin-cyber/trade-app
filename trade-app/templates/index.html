@@ -4,16 +4,17 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>株式トレード支援ツール</title>
-    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
     <style>
-        @import url('[https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap)');
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
         body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; color: #1f2937; }
         .loader {
             border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%;
             width: 24px; height: 24px; animation: spin 1s linear infinite; display: none;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        /* モーダルアニメーション */
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow-x: hidden; overflow-y: hidden !important; }
         .fade-in { animation: fadeIn 0.5s ease-out forwards; opacity: 0; }
@@ -169,7 +170,6 @@
                             <label class="block text-sm font-bold text-gray-700 mb-2">② 決算書・適時開示 (PDF/画像)</label>
                             <input type="file" name="reg_financial_file" id="reg_financial_file" accept="image/*,.pdf" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-200 file:text-gray-700 hover:file:bg-gray-300">
                             <p class="text-xs text-blue-600 mt-2 font-bold" id="modal_financial_status">※未登録</p>
-                            
                             <div class="mt-2 flex gap-4 text-xs">
                                 <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="append" checked class="mr-1">追加保存</label>
                                 <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="overwrite" class="mr-1">上書き</label>
@@ -201,7 +201,6 @@
     </div>
 
     <script>
-        // モーダル開閉
         function openModal() {
             const modal = document.getElementById('envModal');
             modal.classList.remove('opacity-0', 'pointer-events-none');
@@ -214,10 +213,8 @@
             document.body.classList.remove('modal-active');
         }
 
-        // 新規登録モード
         function openNewModal() {
             document.getElementById('modalTitle').innerText = "✨ 新規銘柄の登録";
-            // フォームリセット
             document.getElementById('reg_code').value = "";
             document.getElementById('reg_name').value = "";
             document.getElementById('reg_holding_qty').value = "0";
@@ -226,38 +223,27 @@
             document.getElementById('reg_urls').value = "";
             document.getElementById('reg_daily_chart').value = "";
             document.getElementById('reg_financial_file').value = "";
-            
-            // ステータス表示リセット
             document.getElementById('modal_daily_status').innerText = "※新規";
             document.getElementById('modal_daily_status').className = "text-xs text-gray-400 mt-2";
             document.getElementById('modal_financial_status').innerText = "※新規";
             document.getElementById('modal_financial_status').className = "text-xs text-gray-400 mt-2";
-            
             openModal();
         }
 
-        // 編集モード
         function openEditModal() {
-            const currentCode = document.getElementById('reg_code').value;
+            const selector = document.getElementById('stockSelector');
+            const currentCode = selector.value;
             if(!currentCode) {
-                // セレクトボックスの値を取得し直す
-                const selector = document.getElementById('stockSelector');
-                if (selector.value) {
-                    // まだロードされてない場合のためにロードしてから開く
-                    loadStockInfo(selector.value).then(() => {
-                         document.getElementById('modalTitle').innerText = "📝 " + selector.value + " の編集";
-                         openModal();
-                    });
-                    return;
-                }
                 alert("編集する銘柄をリストから選んでな！");
                 return;
             }
-            document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
-            openModal();
+            // データロードを確認してから開く
+            loadStockInfo(currentCode).then(() => {
+                document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
+                openModal();
+            });
         }
 
-        // ローダー表示
         function showLoader() {
             const btn = document.getElementById('submitBtn');
             const spinner = document.getElementById('loadingSpinner');
@@ -266,7 +252,6 @@
             btn.querySelector('span').innerText = '分析中...';
         }
 
-        // ファイル選択時のプレビュー
         function previewFile(input, targetId) {
             const display = document.getElementById(targetId);
             if(input.files && input.files[0]) {
@@ -276,7 +261,6 @@
             }
         }
 
-        // 銘柄情報ロード（非同期）
         async function loadStockInfo(code) {
             if (!code) return;
             document.getElementById('judge_code').value = code;
@@ -285,7 +269,6 @@
                 const response = await fetch(`/get_stock/${code}`);
                 if (response.ok) {
                     const data = await response.json();
-                    
                     document.getElementById('reg_code').value = code;
                     document.getElementById('reg_name').value = data.name || "";
                     document.getElementById('reg_memo').value = data.memo || "";
