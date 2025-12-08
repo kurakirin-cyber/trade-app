@@ -16,45 +16,15 @@ app = Flask(__name__)
 app.secret_key = 'super_secret_key_for_flash_messages'
 
 # ---------------------------------------------------------
-# Gemini APIの設定 & 完全自動モデルハント機能
+# Gemini APIの設定
 # ---------------------------------------------------------
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-model = None
-
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
-    
-    # 【ここが修正版】使えるモデルをリストから検索して「確実に存在する名前」を使う
-    target_model_name = "gemini-1.5-flash" # とりあえずのデフォルト
-    
-    try:
-        print("--- 🤖 モデル検索開始 🤖 ---")
-        found_model = False
-        # Googleに「今使えるモデル全部教えて！」と聞く
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                print(f"発見: {m.name}")
-                # "1.5-flash" が名前に含まれてたら、それを採用してループ終了
-                if "1.5-flash" in m.name:
-                    target_model_name = m.name
-                    found_model = True
-                    break
-        
-        if not found_model:
-            print("⚠️ 1.5-flashが見つからんかった… 'gemini-pro' を探すわ")
-            # flashがなければ gemini-pro を探す（古いAPI対策）
-            for m in genai.list_models():
-                 if "gemini-pro" in m.name and 'generateContent' in m.supported_generation_methods:
-                    target_model_name = m.name
-                    break
 
-        print(f"👉 最終決定モデル: {target_model_name}")
-        model = genai.GenerativeModel(target_model_name)
-        
-    except Exception as e:
-        print(f"❌ モデル検索でエラー発生: {e}")
-        # 検索すらコケたら、イチかバチか最新の安定版を指定
-        model = genai.GenerativeModel("gemini-1.5-flash")
+# 【修正箇所】ここを絶対に 'gemini-1.5-flash' にする！
+# これ以外の数字（2.5とか）が入ってるとエラーになるで。
+model = genai.GenerativeModel('gemini-1.5-flash')
 
 # ---------------------------------------------------------
 # MongoDBの設定
@@ -62,7 +32,9 @@ if GENAI_API_KEY:
 MONGO_URI = os.getenv("MONGO_URI")
 
 def get_db_collection():
+    """データベースへの接続を取得する関数"""
     if not MONGO_URI:
+        # 接続先がない場合はNoneを返す（エラーで落ちないように）
         return None
     try:
         client = MongoClient(MONGO_URI)
@@ -74,44 +46,49 @@ def get_db_collection():
         return None
 
 # ---------------------------------------------------------
-# 画像処理関数
+# 画像処理用の関数群
 # ---------------------------------------------------------
 def image_to_base64(img):
+    """画像を保存用にテキスト変換"""
     img.thumbnail((1024, 1024)) 
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG")
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 def base64_to_image(b64_str):
+    """保存したテキストを画像に戻す"""
     return PIL.Image.open(io.BytesIO(base64.b64decode(b64_str)))
 
 # ---------------------------------------------------------
 # スクレイピング関数
 # ---------------------------------------------------------
 def fetch_url_content(url_text):
+    """URLからニュース本文を取得する"""
     if not url_text: return ""
     
     raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
     combined_text = ""
     
+    # ブラウザのフリをするヘッダー（ブロック対策）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Referer': 'https://www.google.com/'
     }
 
     for url in raw_urls:
-        clean_url = url.split('?')[0]
+        clean_url = url.split('?')[0] # 余計なパラメータ削除
         try:
             resp = requests.get(clean_url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 resp.encoding = resp.apparent_encoding
                 soup = BeautifulSoup(resp.content, 'html.parser')
+                
+                # 本文抽出ロジック
                 main_content = soup.find('div', class_='article_body') or \
                                soup.find('div', class_='body') or \
-                               soup.find('div', class_='main') or \
                                soup.find('main') or \
                                soup
+                
                 text = ' '.join([p.text for p in main_content.find_all(['p', 'h1', 'h2', 'div'])])
                 clean_text = " ".join(text.split())[:1000]
                 combined_text += f"\n[URL: {clean_url}] {clean_text}..." 
@@ -131,7 +108,7 @@ def summarize_financial_file(file_storage):
         file_data = file_storage.read()
         parts = [
             {"mime_type": mime_type, "data": file_data},
-            "この決算資料（または適時開示）から、デイトレード判断に重要そうな「業績の修正」「サプライズ要素」「ポジティブ/ネガティブな数字」を300文字以内で要約してください。"
+            "この決算資料から、デイトレード判断に重要な「業績修正」「サプライズ」「ポジティブ/ネガティブな要素」を300文字以内で要約してください。"
         ]
         response = model.generate_content(parts)
         return response.text
@@ -149,34 +126,42 @@ def index():
     if collection is not None:
         cursor = collection.find({})
         for doc in cursor:
-            code = doc.get('code')
-            if code:
-                stocks_data[code] = doc
+            if doc.get('code'):
+                stocks_data[doc['code']] = doc
     return render_template('index.html', registered_envs=stocks_data)
 
 @app.route('/get_stock/<code_id>')
 def get_stock(code_id):
+    """API: 選択された銘柄情報を返す"""
     collection = get_db_collection()
     if collection is None:
         return jsonify({}), 500
+
     data = collection.find_one({"code": code_id})
     if data:
         response_data = {k: v for k, v in data.items() if k != '_id'}
+        
+        # 画像有無フラグの設定
         response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
-        if 'daily_chart_b64' in response_data: del response_data['daily_chart_b64']
+        if 'daily_chart_b64' in response_data:
+            del response_data['daily_chart_b64']
+        
         response_data['has_financial_info'] = bool(response_data.get('financial_text'))
+            
         return jsonify(response_data)
+    
     return jsonify({}), 404
 
 @app.route('/register_stock', methods=['POST'])
 def register_stock():
+    """銘柄情報の登録・更新"""
     try:
         collection = get_db_collection()
         if collection is None:
             flash('DB接続エラー', 'error')
             return redirect(url_for('index'))
+            
         code = request.form.get('reg_code')
-        name = request.form.get('reg_name')
         if not code:
             flash('銘柄コードは必須やで！', 'error')
             return redirect(url_for('index'))
@@ -185,8 +170,8 @@ def register_stock():
         
         update_data = {
             "code": code,
-            "name": name if name else existing_data.get('name', ''),
-            "memo": existing_data.get('memo', ''),
+            "name": request.form.get('reg_name') or existing_data.get('name', ''),
+            "memo": request.form.get('reg_memo') or existing_data.get('memo', ''),
             "news_text": existing_data.get('news_text', ''),
             "saved_urls": existing_data.get('saved_urls', ''),
             "financial_text": existing_data.get('financial_text', ''),
@@ -195,11 +180,13 @@ def register_stock():
             "avg_cost": request.form.get('reg_avg_cost', '0')
         }
 
+        # 画像処理
         daily_chart_file = request.files.get('reg_daily_chart')
         if daily_chart_file and daily_chart_file.filename != '':
             img = PIL.Image.open(daily_chart_file)
             update_data['daily_chart_b64'] = image_to_base64(img)
 
+        # URL処理
         url_mode = request.form.get('news_mode', 'append')
         new_urls = request.form.get('reg_urls')
         if new_urls:
@@ -213,6 +200,7 @@ def register_stock():
                 update_data['news_text'] = (current_news + "\n" + scraped_text) if current_news else scraped_text
                 update_data['saved_urls'] = (current_urls + "\n" + new_urls) if current_urls else new_urls
 
+        # 決算書処理
         financial_mode = request.form.get('financial_mode', 'append')
         financial_file = request.files.get('reg_financial_file')
         if financial_file and financial_file.filename != '':
@@ -223,27 +211,30 @@ def register_stock():
                 current = update_data['financial_text']
                 update_data['financial_text'] = (current + "\n[追加情報] " + summary) if current else summary
 
-        new_memo = request.form.get('reg_memo')
-        if new_memo: update_data['memo'] = new_memo
-
         collection.update_one({"code": code}, {"$set": update_data}, upsert=True)
         flash(f'銘柄 {code} を保存したで！', 'success')
+        
     except Exception as e:
         print(f"Register Error: {e}")
         flash(f'登録エラー: {e}', 'error')
+
     return redirect(url_for('index'))
 
 @app.route('/judge', methods=['GET', 'POST'])
 def judge():
+    """AIジャッジ実行"""
     if request.method == 'GET': return redirect(url_for('index'))
+
     try:
         if not GENAI_API_KEY:
             flash('APIキー設定してな！', 'error')
             return redirect(url_for('index'))
+
         code = request.form.get('stock_code')
         extra_note = request.form.get('extra_note')
         chart_file = request.files.get('chart_image') 
         board_file = request.files.get('orderbook_image')
+
         if not chart_file or not board_file:
             flash('5分足と板画像は必須やで！', 'error')
             return redirect(url_for('index'))
@@ -258,63 +249,60 @@ def judge():
         
         daily_chart_b64 = env_data.get('daily_chart_b64')
         images_to_pass = [PIL.Image.open(chart_file), PIL.Image.open(board_file)]
-        daily_status = "なし"
+        
         if daily_chart_b64:
             images_to_pass.append(base64_to_image(daily_chart_b64))
-            daily_status = "あり（画像3枚目）"
 
         prompt = f"""
-        あなたはプロのデイトレーダーです。以下の情報を統合し、現在の局面における最適な売買判断を下してください。
+        あなたはプロのデイトレーダーです。以下の情報を統合しHTMLで売買判断を出力してください。
         
-        【ユーザーの保有状況】
+        【保有状況】
         保有数: {qty}株
         平均取得単価: {cost}円
         
         【環境認識データ】
         銘柄名: {env_data.get('name', '不明')} ({code})
-        事前メモ: {env_data.get('memo', 'なし')}
         ニュース要約: {env_data.get('news_text', 'なし')}
         決算/材料要約: {env_data.get('financial_text', 'なし')}
-        日足チャート: {daily_status}
-
-        【今回入力された情報】
-        画像1: 5分足チャート（短期トレンド）
-        画像2: 板情報（直近の需給）
-        補足メモ: {extra_note}
+        メモ: {env_data.get('memo', 'なし')}
+        今回メモ: {extra_note}
 
         【指示】
-        出力は以下のHTML形式のみで行ってください。余計なマークダウンは不要です。
-        関西弁で親しみやすく、かつ論理的に記述してください。
-
+        出力は以下のHTML形式のみで行ってください。
+        
         <div class="p-6 bg-white border-2 border-indigo-100 rounded-xl shadow-sm">
             <div class="flex items-center justify-between mb-4 border-b pb-2">
                 <span class="text-gray-500 font-bold text-sm">AIジャッジ</span>
                 <span class="text-2xl font-black px-4 py-1 rounded bg-gray-800 text-white">
-                    {{ここに結論を入れる： 買い / 売り / ホールド / 様子見}}
+                    {{ここに結論： 買い / 売り / ホールド / 様子見}}
                 </span>
             </div>
+            
             <div class="grid grid-cols-2 gap-4 mb-4">
                 <div class="bg-blue-50 p-3 rounded text-center">
-                    <p class="text-xs text-blue-800 font-bold mb-1">🎯 ターゲット価格</p>
-                    <p class="text-lg font-bold text-blue-900">{{利確目標価格}} 円</p>
+                    <p class="text-xs text-blue-800 font-bold mb-1">🎯 ターゲット</p>
+                    <p class="text-lg font-bold text-blue-900">{{利確価格}} 円</p>
                 </div>
                 <div class="bg-red-50 p-3 rounded text-center">
-                    <p class="text-xs text-red-800 font-bold mb-1">🛡️ 損切りライン</p>
+                    <p class="text-xs text-red-800 font-bold mb-1">🛡️ 損切り</p>
                     <p class="text-lg font-bold text-red-900">{{損切り価格}} 円</p>
                 </div>
             </div>
+
             <div class="mb-4">
-                 <h4 class="font-bold text-gray-700 mb-2">💡 エントリー/アクション範囲</h4>
+                 <h4 class="font-bold text-gray-700 mb-2">💡 アクション範囲</h4>
                  <p class="text-lg font-bold text-indigo-700 bg-indigo-50 p-2 rounded text-center">
-                    {{具体的な価格帯：例 1000円〜1005円で拾う}}
+                    {{具体的な価格帯}}
                  </p>
             </div>
+
             <div class="space-y-2 text-sm text-gray-700 leading-relaxed">
-                <p><strong>根拠：</strong> {{5分足と板読みからの具体的な根拠を記述}}</p>
-                <p><strong>環境認識：</strong> {{日足や材料を考慮した背景情報を記述}}</p>
+                <p><strong>根拠：</strong> {{5分足と板読みからの具体的な根拠}}</p>
+                <p><strong>環境認識：</strong> {{日足や材料を考慮した背景}}</p>
             </div>
         </div>
         """
+
         response = model.generate_content([prompt] + images_to_pass)
         result_html = response.text.replace('```html', '').replace('```', '')
         
@@ -322,13 +310,14 @@ def judge():
         if collection is not None:
             cursor = collection.find({})
             for doc in cursor:
-                c = doc.get('code')
-                if c: stocks_data[c] = doc
+                if doc.get('code'):
+                    stocks_data[doc['code']] = doc
 
         return render_template('index.html', 
                              judge_result=result_html,
                              registered_envs=stocks_data,
                              form_values={'stock_code': code, 'extra_note': extra_note})
+
     except Exception as e:
         flash(f'エラー: {str(e)}', 'error')
         return redirect(url_for('index'))
