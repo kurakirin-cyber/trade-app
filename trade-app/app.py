@@ -16,44 +16,45 @@ app = Flask(__name__)
 app.secret_key = 'super_secret_key_for_flash_messages'
 
 # ---------------------------------------------------------
-# Gemini APIの設定 & 自動モデル選択ロジック
+# Gemini APIの設定 & 完全自動モデルハント機能
 # ---------------------------------------------------------
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-model = None # 初期化
+model = None
 
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
     
-    # 【ここが新機能】使えるモデルを自分で探して設定する
+    # 【ここが修正版】使えるモデルをリストから検索して「確実に存在する名前」を使う
+    target_model_name = "gemini-1.5-flash" # とりあえずのデフォルト
+    
     try:
         print("--- 🤖 モデル検索開始 🤖 ---")
-        # Googleに「使えるモデルリスト」を問い合わせる
-        available_models = []
+        found_model = False
+        # Googleに「今使えるモデル全部教えて！」と聞く
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
+                print(f"発見: {m.name}")
+                # "1.5-flash" が名前に含まれてたら、それを採用してループ終了
+                if "1.5-flash" in m.name:
+                    target_model_name = m.name
+                    found_model = True
+                    break
         
-        print(f"利用可能リスト: {available_models}")
+        if not found_model:
+            print("⚠️ 1.5-flashが見つからんかった… 'gemini-pro' を探すわ")
+            # flashがなければ gemini-pro を探す（古いAPI対策）
+            for m in genai.list_models():
+                 if "gemini-pro" in m.name and 'generateContent' in m.supported_generation_methods:
+                    target_model_name = m.name
+                    break
 
-        # 優先順位を決めてモデルを選ぶ
-        target_model_name = 'gemini-pro' # 最低限これなら動くはず
-        
-        if 'models/gemini-1.5-flash' in available_models:
-            target_model_name = 'gemini-1.5-flash'
-        elif 'models/gemini-1.5-flash-001' in available_models:
-            target_model_name = 'gemini-1.5-flash-001'
-        elif 'models/gemini-1.5-flash-002' in available_models:
-            target_model_name = 'gemini-1.5-flash-002'
-        elif 'models/gemini-1.5-pro' in available_models:
-            target_model_name = 'gemini-1.5-pro'
-            
-        print(f"👉 決定したモデル: {target_model_name}")
+        print(f"👉 最終決定モデル: {target_model_name}")
         model = genai.GenerativeModel(target_model_name)
         
     except Exception as e:
-        print(f"モデル自動選択エラー: {e}")
-        # エラーが出たら一番古いけど確実なやつで強制起動
-        model = genai.GenerativeModel('gemini-pro')
+        print(f"❌ モデル検索でエラー発生: {e}")
+        # 検索すらコケたら、イチかバチか最新の安定版を指定
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
 # ---------------------------------------------------------
 # MongoDBの設定
