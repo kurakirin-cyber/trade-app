@@ -1,349 +1,335 @@
-import os
-import requests
-import base64
-import io
-import mimetypes
-from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-import google.generativeai as genai
-from dotenv import load_dotenv
-import PIL.Image
-from pymongo import MongoClient
-
-load_dotenv()
-
-app = Flask(__name__)
-app.secret_key = 'super_secret_key_for_flash_messages'
-
-# --- Geminiの設定 ---
-GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GENAI_API_KEY:
-    genai.configure(api_key=GENAI_API_KEY)
-
-# ★安定版モデルを指定（requirements.txtの更新必須）
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-# --- MongoDBの設定 ---
-MONGO_URI = os.getenv("MONGO_URI")
-
-def get_db_collection():
-    if not MONGO_URI:
-        # ローカルテスト時などはエラーを出さずにNoneを返す
-        return None
-    try:
-        client = MongoClient(MONGO_URI)
-        db = client['stock_app_db']
-        collection = db['stocks']
-        return collection
-    except Exception as e:
-        print(f"MongoDB接続エラー: {e}")
-        return None
-
-# --- 画像処理関数 ---
-def image_to_base64(img):
-    """画像をBase64文字列に変換"""
-    img.thumbnail((1024, 1024)) 
-    buffered = io.BytesIO()
-    img.save(buffered, format="JPEG")
-    return base64.b64encode(buffered.getvalue()).decode('utf-8')
-
-def base64_to_image(b64_str):
-    """Base64文字列を画像に戻す"""
-    return PIL.Image.open(io.BytesIO(base64.b64decode(b64_str)))
-
-# --- スクレイピング関数（URL掃除＆ブロック対策強化版） ---
-def fetch_url_content(url_text):
-    if not url_text: return ""
-    
-    # URLリストを作成（空行を除去）
-    raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
-    combined_text = ""
-    
-    # ちゃんとブラウザのフリをするためのヘッダー（株探対策）
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Referer': 'https://www.google.com/'
-    }
-
-    for url in raw_urls:
-        # URLの「?」以降（トラッキング情報）をカットする
-        clean_url = url.split('?')[0]
-        
-        try:
-            # タイムアウトを10秒に設定
-            resp = requests.get(clean_url, headers=headers, timeout=10)
-            
-            if resp.status_code == 200:
-                # 文字コードを自動判定して文字化けを防ぐ
-                resp.encoding = resp.apparent_encoding
-                
-                soup = BeautifulSoup(resp.content, 'html.parser')
-                
-                # 本文っぽいところを優先的に探す
-                main_content = soup.find('div', class_='article_body') or \
-                               soup.find('div', class_='body') or \
-                               soup.find('div', class_='main') or \
-                               soup.find('main') or \
-                               soup
-                
-                # テキストを抽出
-                text = ' '.join([p.text for p in main_content.find_all(['p', 'h1', 'h2', 'div'])])
-                
-                # 余計な空白を削除して、長すぎないように1000文字でカット
-                clean_text = " ".join(text.split())[:1000]
-                combined_text += f"\n[URL: {clean_url}] {clean_text}..." 
-            else:
-                combined_text += f"\n[アクセス不可: {clean_url} (Status: {resp.status_code})]"
-                
-        except Exception as e:
-            print(f"Scraping error for {clean_url}: {e}")
-            combined_text += f"\n[エラー: {clean_url}]"
-            
-    return combined_text
-
-# --- 決算書要約関数 ---
-def summarize_financial_file(file_storage):
-    try:
-        filename = file_storage.filename
-        mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        file_data = file_storage.read()
-        parts = [
-            {"mime_type": mime_type, "data": file_data},
-            "この決算資料（または適時開示）から、デイトレード判断に重要そうな「業績の修正」「サプライズ要素」「ポジティブ/ネガティブな数字」を300文字以内で要約してください。"
-        ]
-        response = model.generate_content(parts)
-        return response.text
-    except Exception as e:
-        return f"決算書読み込みエラー: {e}"
-
-# --- ルート設定 ---
-
-@app.route('/')
-def index():
-    stocks_data = {}
-    collection = get_db_collection()
-    
-    # 接続確認（Noneチェック必須）
-    if collection is not None:
-        cursor = collection.find({})
-        for doc in cursor:
-            code = doc.get('code')
-            if code:
-                stocks_data[code] = doc
-    
-    return render_template('index.html', registered_envs=stocks_data)
-
-@app.route('/get_stock/<code_id>')
-def get_stock(code_id):
-    """API: 選択された銘柄情報を返す"""
-    collection = get_db_collection()
-    if collection is None:
-        return jsonify({}), 500
-
-    data = collection.find_one({"code": code_id})
-    if data:
-        # ObjectIdを除外
-        response_data = {k: v for k, v in data.items() if k != '_id'}
-        
-        # 画像データの有無フラグ
-        response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
-        if 'daily_chart_b64' in response_data:
-            del response_data['daily_chart_b64']
-        
-        # 決算情報の有無フラグ
-        response_data['has_financial_info'] = bool(response_data.get('financial_text'))
-            
-        return jsonify(response_data)
-    
-    return jsonify({}), 404
-
-@app.route('/register_stock', methods=['POST'])
-def register_stock():
-    """銘柄情報の登録・更新"""
-    try:
-        collection = get_db_collection()
-        if collection is None:
-            flash('DB接続エラー', 'error')
-            return redirect(url_for('index'))
-            
-        code = request.form.get('reg_code')
-        name = request.form.get('reg_name')
-        
-        if not code:
-            flash('銘柄コードは必須やで！', 'error')
-            return redirect(url_for('index'))
-
-        existing_data = collection.find_one({"code": code}) or {}
-        
-        update_data = {
-            "code": code,
-            "name": name if name else existing_data.get('name', ''),
-            "memo": existing_data.get('memo', ''),
-            "news_text": existing_data.get('news_text', ''),
-            "saved_urls": existing_data.get('saved_urls', ''),
-            "financial_text": existing_data.get('financial_text', ''),
-            "daily_chart_b64": existing_data.get('daily_chart_b64', None),
-            "holding_qty": request.form.get('reg_holding_qty', '0'),
-            "avg_cost": request.form.get('reg_avg_cost', '0')
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>株式トレード支援ツール</title>
+    <script src="[https://cdn.tailwindcss.com](https://cdn.tailwindcss.com)"></script>
+    <style>
+        @import url('[https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap](https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap)');
+        body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; color: #1f2937; }
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%;
+            width: 24px; height: 24px; animation: spin 1s linear infinite; display: none;
         }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        /* モーダルアニメーション */
+        .modal { transition: opacity 0.25s ease; }
+        body.modal-active { overflow-x: hidden; overflow-y: hidden !important; }
+        .fade-in { animation: fadeIn 0.5s ease-out forwards; opacity: 0; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="p-4 md:p-8 max-w-4xl mx-auto pb-24">
 
-        # 1. 日足チャート
-        daily_chart_file = request.files.get('reg_daily_chart')
-        if daily_chart_file and daily_chart_file.filename != '':
-            img = PIL.Image.open(daily_chart_file)
-            update_data['daily_chart_b64'] = image_to_base64(img)
-
-        # 2. ニュースURL
-        url_mode = request.form.get('news_mode', 'append')
-        new_urls = request.form.get('reg_urls')
-        if new_urls:
-            # ここで fetch_url_content を呼ぶ（内部でURL掃除してる）
-            scraped_text = fetch_url_content(new_urls)
-            
-            if url_mode == 'overwrite':
-                update_data['news_text'] = scraped_text
-                update_data['saved_urls'] = new_urls
-            else:
-                current_news = update_data['news_text']
-                current_urls = update_data['saved_urls']
-                update_data['news_text'] = (current_news + "\n" + scraped_text) if current_news else scraped_text
-                update_data['saved_urls'] = (current_urls + "\n" + new_urls) if current_urls else new_urls
-
-        # 3. 決算書
-        financial_mode = request.form.get('financial_mode', 'append')
-        financial_file = request.files.get('reg_financial_file')
-        if financial_file and financial_file.filename != '':
-            summary = summarize_financial_file(financial_file)
-            if financial_mode == 'overwrite':
-                update_data['financial_text'] = summary
-            else:
-                current = update_data['financial_text']
-                update_data['financial_text'] = (current + "\n[追加情報] " + summary) if current else summary
-
-        # 4. メモ
-        new_memo = request.form.get('reg_memo')
-        if new_memo:
-            update_data['memo'] = new_memo
-
-        collection.update_one({"code": code}, {"$set": update_data}, upsert=True)
-        flash(f'銘柄 {code} を保存したで！', 'success')
-        
-    except Exception as e:
-        print(f"Register Error: {e}")
-        flash(f'登録エラー: {e}', 'error')
-
-    return redirect(url_for('index'))
-
-@app.route('/judge', methods=['GET', 'POST'])
-def judge():
-    if request.method == 'GET': return redirect(url_for('index'))
-
-    try:
-        if not GENAI_API_KEY:
-            flash('APIキー設定してな！', 'error')
-            return redirect(url_for('index'))
-
-        code = request.form.get('stock_code')
-        extra_note = request.form.get('extra_note')
-        chart_file = request.files.get('chart_image') 
-        board_file = request.files.get('orderbook_image')
-
-        if not chart_file or not board_file:
-            flash('5分足と板画像は必須やで！', 'error')
-            return redirect(url_for('index'))
-
-        collection = get_db_collection()
-        env_data = {}
-        if collection is not None:
-            env_data = collection.find_one({"code": code}) or {}
-        
-        qty = env_data.get('holding_qty', '0')
-        cost = env_data.get('avg_cost', '0')
-        
-        daily_chart_b64 = env_data.get('daily_chart_b64')
-        images_to_pass = [PIL.Image.open(chart_file), PIL.Image.open(board_file)]
-        daily_status = "なし"
-        
-        if daily_chart_b64:
-            images_to_pass.append(base64_to_image(daily_chart_b64))
-            daily_status = "あり（画像3枚目）"
-
-        # AIへの指示プロンプト（ここが短いとアホになるのでフル記述）
-        prompt = f"""
-        あなたはプロのデイトレーダーです。以下の情報を統合し、現在の局面における最適な売買判断を下してください。
-        
-        【ユーザーの保有状況】
-        保有数: {qty}株
-        平均取得単価: {cost}円
-        
-        【環境認識データ】
-        銘柄名: {env_data.get('name', '不明')} ({code})
-        事前メモ: {env_data.get('memo', 'なし')}
-        ニュース要約: {env_data.get('news_text', 'なし')}
-        決算/材料要約: {env_data.get('financial_text', 'なし')}
-        日足チャート: {daily_status}
-
-        【今回入力された情報】
-        画像1: 5分足チャート（短期トレンド）
-        画像2: 板情報（直近の需給）
-        補足メモ: {extra_note}
-
-        【指示】
-        出力は以下のHTML形式のみで行ってください。余計なマークダウン（```htmlなど）は不要です。
-        関西弁で親しみやすく、かつ論理的に記述してください。
-
-        <div class="p-6 bg-white border-2 border-indigo-100 rounded-xl shadow-sm">
-            <div class="flex items-center justify-between mb-4 border-b pb-2">
-                <span class="text-gray-500 font-bold text-sm">AIジャッジ</span>
-                <span class="text-2xl font-black px-4 py-1 rounded bg-gray-800 text-white">
-                    {{ここに結論を入れる： 買い / 売り / ホールド / 様子見}}
-                </span>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <div class="mb-6">
+                {% for category, message in messages %}
+                    <div class="p-4 mb-2 rounded-lg {% if category == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
             </div>
+        {% endif %}
+    {% endwith %}
+
+    <header class="mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+        <div>
+            <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
+                <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
+            </h1>
+            <p class="text-xs text-gray-500">v3.5 完全動作版</p>
+        </div>
+        
+        <button onclick="openNewModal()" class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition flex justify-center items-center gap-2">
+            <span>✨ 新規銘柄を追加</span>
+        </button>
+    </header>
+
+    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6">
+        <label class="font-bold whitespace-nowrap text-gray-700 block mb-2">登録済み銘柄を呼び出す:</label>
+        <div class="flex flex-col md:flex-row gap-2">
+            <select id="stockSelector" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-lg font-bold" onchange="loadStockInfo(this.value)">
+                {% if not registered_envs %}
+                    <option value="">(登録された銘柄はありません)</option>
+                {% endif %}
+                {% for code, data in registered_envs.items() %}
+                    <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
+                {% endfor %}
+            </select>
+            <button onclick="openEditModal()" class="w-full md:w-auto whitespace-nowrap bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 px-6 rounded-lg transition">
+                📝 編集
+            </button>
+        </div>
+    </section>
+
+    <section class="bg-white rounded-xl p-6 shadow-sm border border-red-200 mb-8">
+        <h2 class="font-bold text-lg mb-4 flex items-center gap-2 text-red-600">
+            <span>⚡</span> AIジャッジ (5分足+板)
+        </h2>
+        <form action="{{ url_for('judge') }}" method="POST" enctype="multipart/form-data" class="space-y-4" onsubmit="showLoader()">
             
-            <div class="grid grid-cols-2 gap-4 mb-4">
-                <div class="bg-blue-50 p-3 rounded text-center">
-                    <p class="text-xs text-blue-800 font-bold mb-1">🎯 ターゲット価格</p>
-                    <p class="text-lg font-bold text-blue-900">{{利確目標価格}} 円</p>
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">対象銘柄 (自動入力)</label>
+                <input type="text" name="stock_code" id="judge_code" value="{{ form_values.stock_code if form_values else '' }}" class="w-full bg-gray-100 border p-3 rounded font-bold text-xl tracking-wider text-center" required readonly placeholder="上のリストから選択">
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:bg-gray-50 transition cursor-pointer relative" onclick="document.getElementById('chart_input').click()">
+                    <span class="text-3xl block mb-2">📉</span>
+                    <label class="block text-sm font-bold text-gray-600 cursor-pointer">5分足チャート</label>
+                    <input type="file" id="chart_input" name="chart_image" accept="image/*" class="hidden" onchange="previewFile(this, 'chartPreview')">
+                    <div id="chartPreview" class="text-xs text-blue-500 mt-2 font-bold truncate">未選択</div>
                 </div>
-                <div class="bg-red-50 p-3 rounded text-center">
-                    <p class="text-xs text-red-800 font-bold mb-1">🛡️ 損切りライン</p>
-                    <p class="text-lg font-bold text-red-900">{{損切り価格}} 円</p>
+                <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:bg-gray-50 transition cursor-pointer relative" onclick="document.getElementById('board_input').click()">
+                    <span class="text-3xl block mb-2">📊</span>
+                    <label class="block text-sm font-bold text-gray-600 cursor-pointer">板情報 (気配)</label>
+                    <input type="file" id="board_input" name="orderbook_image" accept="image/*" class="hidden" onchange="previewFile(this, 'boardPreview')">
+                    <div id="boardPreview" class="text-xs text-blue-500 mt-2 font-bold truncate">未選択</div>
                 </div>
             </div>
 
-            <div class="mb-4">
-                 <h4 class="font-bold text-gray-700 mb-2">💡 エントリー/アクション範囲</h4>
-                 <p class="text-lg font-bold text-indigo-700 bg-indigo-50 p-2 rounded text-center">
-                    {{具体的な価格帯：例 1000円〜1005円で拾う}}
-                 </p>
+            <div>
+                <label class="block text-xs font-bold text-gray-500 mb-1">今回の気付き・メモ</label>
+                <textarea name="extra_note" class="w-full border p-3 rounded-lg h-20 text-sm" placeholder="例: 3365円に大きな売り板がある...">{{ form_values.extra_note if form_values else '' }}</textarea>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-2 text-xs md:text-sm">
+                <div id="daily_chart_indicator" class="text-gray-400 text-center py-2 bg-gray-50 rounded font-bold border">
+                    日足画像: 未登録
+                </div>
+                <div id="financial_indicator" class="text-gray-400 text-center py-2 bg-gray-50 rounded font-bold border">
+                    決算情報: 未登録
+                </div>
             </div>
 
-            <div class="space-y-2 text-sm text-gray-700 leading-relaxed">
-                <p><strong>根拠：</strong> {{5分足と板読みからの具体的な根拠を記述}}</p>
-                <p><strong>環境認識：</strong> {{日足や材料を考慮した背景情報を記述}}</p>
+            <button type="submit" id="submitBtn" class="w-full bg-gradient-to-r from-red-600 to-red-500 hover:from-red-700 hover:to-red-600 text-white font-bold py-4 rounded-xl shadow-lg flex justify-center items-center gap-2 text-lg transition transform active:scale-95">
+                <span>🤖 AIで売買判断する</span>
+                <div class="loader" id="loadingSpinner"></div>
+            </button>
+        </form>
+    </section>
+
+    {% if judge_result %}
+    <section class="bg-white rounded-xl shadow-lg border-2 border-blue-100 overflow-hidden mb-8 fade-in">
+        <div class="bg-blue-50 px-6 py-4 border-b border-blue-100 flex justify-between items-center">
+            <h2 class="font-bold text-xl text-blue-900 flex items-center gap-2">
+                <span>🤖</span> AI分析レポート
+            </h2>
+            <a href="{{ url_for('index') }}" class="text-xs bg-white border border-blue-300 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-600 hover:text-white transition">クリア</a>
+        </div>
+        <div class="p-6">
+            {{ judge_result | safe }}
+        </div>
+    </section>
+    {% endif %}
+
+    <div id="envModal" class="modal opacity-0 pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="modal-overlay absolute inset-0 bg-gray-900 opacity-60" onclick="closeModal()"></div>
+        
+        <div class="bg-white w-full md:max-w-2xl mx-auto rounded-2xl shadow-2xl z-50 overflow-y-auto max-h-[90vh] flex flex-col">
+            <div class="flex justify-between items-center p-5 border-b sticky top-0 bg-white z-10">
+                <p class="text-xl font-bold text-gray-800" id="modalTitle">📝 銘柄情報の登録</p>
+                <button class="text-gray-400 hover:text-gray-600 text-2xl" onclick="closeModal()">×</button>
+            </div>
+
+            <div class="p-6">
+                <form action="{{ url_for('register_stock') }}" method="POST" enctype="multipart/form-data" class="space-y-6">
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄コード *</label>
+                            <input type="text" name="reg_code" id="reg_code" placeholder="例: 9984" class="w-full border-2 border-gray-200 p-3 rounded-lg focus:border-green-500 focus:outline-none font-bold text-lg" required>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄名</label>
+                            <input type="text" name="reg_name" id="reg_name" placeholder="例: ソフトバンクG" class="w-full border-2 border-gray-200 p-3 rounded-lg focus:border-green-500 focus:outline-none">
+                        </div>
+                    </div>
+
+                    <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200 grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-yellow-800 mb-1">保有株数</label>
+                            <input type="number" name="reg_holding_qty" id="reg_holding_qty" value="0" class="w-full border border-yellow-300 p-2 rounded text-right bg-white">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-yellow-800 mb-1">平均取得単価 (円)</label>
+                            <input type="number" name="reg_avg_cost" id="reg_avg_cost" value="0" class="w-full border border-yellow-300 p-2 rounded text-right bg-white">
+                        </div>
+                    </div>
+
+                    <div class="bg-green-50 p-4 rounded-xl border border-green-100">
+                        <label class="block text-sm font-bold text-green-800 mb-2">① 日足チャート (環境認識用)</label>
+                        <input type="file" name="reg_daily_chart" id="reg_daily_chart" accept="image/*" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-100 file:text-green-700 hover:file:bg-green-200">
+                        <p class="text-xs text-green-600 mt-2 font-bold" id="modal_daily_status">※新規登録</p>
+                    </div>
+
+                    <div class="space-y-4">
+                        <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                            <label class="block text-sm font-bold text-gray-700 mb-2">② 決算書・適時開示 (PDF/画像)</label>
+                            <input type="file" name="reg_financial_file" id="reg_financial_file" accept="image/*,.pdf" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-200 file:text-gray-700 hover:file:bg-gray-300">
+                            <p class="text-xs text-blue-600 mt-2 font-bold" id="modal_financial_status">※未登録</p>
+                            
+                            <div class="mt-2 flex gap-4 text-xs">
+                                <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="append" checked class="mr-1">追加保存</label>
+                                <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="overwrite" class="mr-1">上書き</label>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">③ 参考ニュースURL (改行で複数可)</label>
+                            <textarea name="reg_urls" id="reg_urls" placeholder="https://..." class="w-full border p-3 rounded-lg h-24 text-xs font-mono"></textarea>
+                            <div class="mt-1 flex gap-4 text-xs text-gray-500">
+                                <label class="flex items-center cursor-pointer"><input type="radio" name="news_mode" value="append" checked class="mr-1">追加</label>
+                                <label class="flex items-center cursor-pointer"><input type="radio" name="news_mode" value="overwrite" class="mr-1">上書き</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-gray-500 mb-1">④ 自由メモ</label>
+                        <textarea name="reg_memo" id="reg_memo" placeholder="監視ポイントなど..." class="w-full border p-3 rounded-lg h-20 text-sm"></textarea>
+                    </div>
+
+                    <div class="flex justify-end pt-4 gap-3 sticky bottom-0 bg-white pb-2">
+                        <button type="button" onclick="closeModal()" class="py-3 px-6 rounded-lg text-gray-500 font-bold hover:bg-gray-100 transition">キャンセル</button>
+                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg shadow-md transition">保存する</button>
+                    </div>
+                </form>
             </div>
         </div>
-        """
+    </div>
 
-        response = model.generate_content([prompt] + images_to_pass)
-        result_html = response.text.replace('```html', '').replace('```', '')
-        
-        stocks_data = {}
-        if collection is not None:
-            cursor = collection.find({})
-            for doc in cursor:
-                c = doc.get('code')
-                if c: stocks_data[c] = doc
+    <script>
+        // モーダル開閉
+        function openModal() {
+            const modal = document.getElementById('envModal');
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            document.body.classList.add('modal-active');
+        }
 
-        return render_template('index.html', 
-                             judge_result=result_html,
-                             registered_envs=stocks_data,
-                             form_values={'stock_code': code, 'extra_note': extra_note})
+        function closeModal() {
+            const modal = document.getElementById('envModal');
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            document.body.classList.remove('modal-active');
+        }
 
-    except Exception as e:
-        flash(f'エラー: {str(e)}', 'error')
-        return redirect(url_for('index'))
+        // 新規登録モード
+        function openNewModal() {
+            document.getElementById('modalTitle').innerText = "✨ 新規銘柄の登録";
+            // フォームリセット
+            document.getElementById('reg_code').value = "";
+            document.getElementById('reg_name').value = "";
+            document.getElementById('reg_holding_qty').value = "0";
+            document.getElementById('reg_avg_cost').value = "0";
+            document.getElementById('reg_memo').value = "";
+            document.getElementById('reg_urls').value = "";
+            document.getElementById('reg_daily_chart').value = "";
+            document.getElementById('reg_financial_file').value = "";
+            
+            // ステータス表示リセット
+            document.getElementById('modal_daily_status').innerText = "※新規";
+            document.getElementById('modal_daily_status').className = "text-xs text-gray-400 mt-2";
+            document.getElementById('modal_financial_status').innerText = "※新規";
+            document.getElementById('modal_financial_status').className = "text-xs text-gray-400 mt-2";
+            
+            openModal();
+        }
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+        // 編集モード
+        function openEditModal() {
+            const currentCode = document.getElementById('reg_code').value;
+            if(!currentCode) {
+                // セレクトボックスの値を取得し直す
+                const selector = document.getElementById('stockSelector');
+                if (selector.value) {
+                    // まだロードされてない場合のためにロードしてから開く
+                    loadStockInfo(selector.value).then(() => {
+                         document.getElementById('modalTitle').innerText = "📝 " + selector.value + " の編集";
+                         openModal();
+                    });
+                    return;
+                }
+                alert("編集する銘柄をリストから選んでな！");
+                return;
+            }
+            document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
+            openModal();
+        }
+
+        // ローダー表示
+        function showLoader() {
+            const btn = document.getElementById('submitBtn');
+            const spinner = document.getElementById('loadingSpinner');
+            btn.classList.add('opacity-75', 'cursor-not-allowed');
+            spinner.style.display = 'block';
+            btn.querySelector('span').innerText = '分析中...';
+        }
+
+        // ファイル選択時のプレビュー
+        function previewFile(input, targetId) {
+            const display = document.getElementById(targetId);
+            if(input.files && input.files[0]) {
+                display.innerText = "✅ " + input.files[0].name;
+                display.classList.remove('text-gray-400');
+                display.classList.add('text-blue-600', 'font-bold');
+            }
+        }
+
+        // 銘柄情報ロード（非同期）
+        async function loadStockInfo(code) {
+            if (!code) return;
+            document.getElementById('judge_code').value = code;
+
+            try {
+                const response = await fetch(`/get_stock/${code}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    document.getElementById('reg_code').value = code;
+                    document.getElementById('reg_name').value = data.name || "";
+                    document.getElementById('reg_memo').value = data.memo || "";
+                    document.getElementById('reg_holding_qty').value = data.holding_qty || "0";
+                    document.getElementById('reg_avg_cost').value = data.avg_cost || "0";
+                    document.getElementById('reg_urls').value = data.saved_urls || "";
+                    
+                    const dailyInd = document.getElementById('daily_chart_indicator');
+                    const modalDaily = document.getElementById('modal_daily_status');
+                    if (data.has_daily_chart) {
+                        dailyInd.innerText = "✅ 日足: 登録済";
+                        dailyInd.className = "text-center py-2 bg-green-100 text-green-800 font-bold rounded border border-green-200";
+                        modalDaily.innerText = "✅ 登録済み画像あり (上書き可)";
+                        modalDaily.className = "text-xs text-green-600 mt-2 font-bold";
+                    } else {
+                        dailyInd.innerText = "⚠️ 日足: 未登録";
+                        dailyInd.className = "text-center py-2 bg-gray-100 text-gray-400 rounded border border-gray-200";
+                        modalDaily.innerText = "※未登録";
+                        modalDaily.className = "text-xs text-gray-400 mt-2";
+                    }
+
+                    const finInd = document.getElementById('financial_indicator');
+                    const modalFin = document.getElementById('modal_financial_status');
+                    if (data.has_financial_info) {
+                        finInd.innerText = "✅ 決算: あり";
+                        finInd.className = "text-center py-2 bg-green-100 text-green-800 font-bold rounded border border-green-200";
+                        modalFin.innerText = "✅ 登録済み情報あり (上書き可)";
+                        modalFin.className = "text-xs text-green-600 mt-2 font-bold";
+                    } else {
+                        finInd.innerText = "⚠️ 決算: 未登録";
+                        finInd.className = "text-center py-2 bg-gray-100 text-gray-400 rounded border border-gray-200";
+                        modalFin.innerText = "※未登録";
+                        modalFin.className = "text-xs text-gray-400 mt-2";
+                    }
+                }
+            } catch (e) {
+                console.error("Fetch error:", e);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const selector = document.getElementById('stockSelector');
+            if(selector.value) loadStockInfo(selector.value);
+        });
+    </script>
+</body>
+</html>
