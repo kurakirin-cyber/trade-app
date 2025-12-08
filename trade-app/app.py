@@ -15,27 +15,49 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = 'super_secret_key_for_flash_messages'
 
-# --- Geminiの設定 ---
+# ---------------------------------------------------------
+# Gemini APIの設定 & 自動モデル選択ロジック
+# ---------------------------------------------------------
 GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
+model = None # 初期化
+
 if GENAI_API_KEY:
     genai.configure(api_key=GENAI_API_KEY)
     
-    # 【デバッグ用】起動時に使えるモデルを全部ログに出す！
-    # Renderの「Logs」画面でこれを見れば、正解の名前がわかる仕掛けや
+    # 【ここが新機能】使えるモデルを自分で探して設定する
     try:
-        print("--- 🤖 利用可能なモデル一覧 🤖 ---")
+        print("--- 🤖 モデル検索開始 🤖 ---")
+        # Googleに「使えるモデルリスト」を問い合わせる
+        available_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
-                print(f"発見: {m.name}")
-        print("-----------------------------------")
+                available_models.append(m.name)
+        
+        print(f"利用可能リスト: {available_models}")
+
+        # 優先順位を決めてモデルを選ぶ
+        target_model_name = 'gemini-pro' # 最低限これなら動くはず
+        
+        if 'models/gemini-1.5-flash' in available_models:
+            target_model_name = 'gemini-1.5-flash'
+        elif 'models/gemini-1.5-flash-001' in available_models:
+            target_model_name = 'gemini-1.5-flash-001'
+        elif 'models/gemini-1.5-flash-002' in available_models:
+            target_model_name = 'gemini-1.5-flash-002'
+        elif 'models/gemini-1.5-pro' in available_models:
+            target_model_name = 'gemini-1.5-pro'
+            
+        print(f"👉 決定したモデル: {target_model_name}")
+        model = genai.GenerativeModel(target_model_name)
+        
     except Exception as e:
-        print(f"モデル一覧の取得に失敗（APIキーの問題かも？）: {e}")
+        print(f"モデル自動選択エラー: {e}")
+        # エラーが出たら一番古いけど確実なやつで強制起動
+        model = genai.GenerativeModel('gemini-pro')
 
-# 【修正】一番確実な「バージョン番号付き」の名前に変更
-# ※もしこれでダメでも、上のログを見れば正解がわかる！
-model = genai.GenerativeModel('gemini-1.5-flash-001')
-
-# --- MongoDBの設定 ---
+# ---------------------------------------------------------
+# MongoDBの設定
+# ---------------------------------------------------------
 MONGO_URI = os.getenv("MONGO_URI")
 
 def get_db_collection():
@@ -50,7 +72,9 @@ def get_db_collection():
         print(f"MongoDB接続エラー: {e}")
         return None
 
-# --- 画像処理関数 ---
+# ---------------------------------------------------------
+# 画像処理関数
+# ---------------------------------------------------------
 def image_to_base64(img):
     img.thumbnail((1024, 1024)) 
     buffered = io.BytesIO()
@@ -60,7 +84,9 @@ def image_to_base64(img):
 def base64_to_image(b64_str):
     return PIL.Image.open(io.BytesIO(base64.b64decode(b64_str)))
 
-# --- スクレイピング関数 ---
+# ---------------------------------------------------------
+# スクレイピング関数
+# ---------------------------------------------------------
 def fetch_url_content(url_text):
     if not url_text: return ""
     
@@ -82,6 +108,7 @@ def fetch_url_content(url_text):
                 soup = BeautifulSoup(resp.content, 'html.parser')
                 main_content = soup.find('div', class_='article_body') or \
                                soup.find('div', class_='body') or \
+                               soup.find('div', class_='main') or \
                                soup.find('main') or \
                                soup
                 text = ' '.join([p.text for p in main_content.find_all(['p', 'h1', 'h2', 'div'])])
@@ -93,7 +120,9 @@ def fetch_url_content(url_text):
             combined_text += f"\n[エラー: {clean_url}]"
     return combined_text
 
-# --- 決算書要約関数 ---
+# ---------------------------------------------------------
+# 決算書要約関数
+# ---------------------------------------------------------
 def summarize_financial_file(file_storage):
     try:
         filename = file_storage.filename
@@ -108,7 +137,9 @@ def summarize_financial_file(file_storage):
     except Exception as e:
         return f"決算書読み込みエラー: {e}"
 
-# --- ルート設定 ---
+# ---------------------------------------------------------
+# ルート設定
+# ---------------------------------------------------------
 
 @app.route('/')
 def index():
