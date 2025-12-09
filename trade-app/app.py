@@ -2,325 +2,255 @@ import os
 import requests
 import base64
 import io
-import mimetypes
+import datetime
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
-import google.generativeai as genai
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
 from dotenv import load_dotenv
 import PIL.Image
 from pymongo import MongoClient
+from bson.objectid import ObjectId # これが必要
 
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'super_secret_key_for_flash_messages'
+app.secret_key = 'super_secret_key_for_stock_app'
 
-# ---------------------------------------------------------
-# Gemini APIの設定
-# ---------------------------------------------------------
-GENAI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GENAI_API_KEY:
-    genai.configure(api_key=GENAI_API_KEY)
-
-# 【修正箇所】ここを絶対に 'gemini-1.5-flash' にする！
-# これ以外の数字（2.5とか）が入ってるとエラーになるで。
-model = genai.GenerativeModel('gemini-1.5-flash')
-
-# ---------------------------------------------------------
-# MongoDBの設定
-# ---------------------------------------------------------
+# --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
 
 def get_db_collection():
-    """データベースへの接続を取得する関数"""
-    if not MONGO_URI:
-        # 接続先がない場合はNoneを返す（エラーで落ちないように）
-        return None
+    if not MONGO_URI: return None
     try:
         client = MongoClient(MONGO_URI)
         db = client['stock_app_db']
-        collection = db['stocks']
-        return collection
+        return db['stocks']
     except Exception as e:
-        print(f"MongoDB接続エラー: {e}")
+        print(f"DB接続エラー: {e}")
         return None
 
-# ---------------------------------------------------------
-# 画像処理用の関数群
-# ---------------------------------------------------------
+# --- 画像処理 ---
 def image_to_base64(img):
-    """画像を保存用にテキスト変換"""
+    img = img.convert('RGB')
     img.thumbnail((1024, 1024)) 
     buffered = io.BytesIO()
-    img.save(buffered, format="JPEG")
+    img.save(buffered, format="JPEG", quality=70)
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-def base64_to_image(b64_str):
-    """保存したテキストを画像に戻す"""
-    return PIL.Image.open(io.BytesIO(base64.b64decode(b64_str)))
-
-# ---------------------------------------------------------
-# スクレイピング関数
-# ---------------------------------------------------------
+# --- ニュース本文抽出 ---
 def fetch_url_content(url_text):
-    """URLからニュース本文を取得する"""
     if not url_text: return ""
-    
     raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
     combined_text = ""
-    
-    # ブラウザのフリをするヘッダー（ブロック対策）
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://www.google.com/'
     }
-
     for url in raw_urls:
-        clean_url = url.split('?')[0] # 余計なパラメータ削除
         try:
-            resp = requests.get(clean_url, headers=headers, timeout=10)
+            resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 resp.encoding = resp.apparent_encoding
                 soup = BeautifulSoup(resp.content, 'html.parser')
-                
-                # 本文抽出ロジック
-                main_content = soup.find('div', class_='article_body') or \
-                               soup.find('div', class_='body') or \
-                               soup.find('main') or \
-                               soup
-                
-                text = ' '.join([p.text for p in main_content.find_all(['p', 'h1', 'h2', 'div'])])
-                clean_text = " ".join(text.split())[:1000]
-                combined_text += f"\n[URL: {clean_url}] {clean_text}..." 
+                for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe']):
+                    tag.decompose()
+                text = soup.get_text(separator='\n', strip=True)
+                combined_text += f"\n--- [記事: {url}] ---\n{text[:3000]}...\n"
             else:
-                combined_text += f"\n[アクセス不可: {clean_url} (Status: {resp.status_code})]"
+                combined_text += f"\n[URL: {url}] アクセス不可 ({resp.status_code})\n"
         except Exception as e:
-            combined_text += f"\n[エラー: {clean_url}]"
+            combined_text += f"\n[URL: {url}] エラー: {e}\n"
     return combined_text
 
-# ---------------------------------------------------------
-# 決算書要約関数
-# ---------------------------------------------------------
-def summarize_financial_file(file_storage):
-    try:
-        filename = file_storage.filename
-        mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
-        file_data = file_storage.read()
-        parts = [
-            {"mime_type": mime_type, "data": file_data},
-            "この決算資料から、デイトレード判断に重要な「業績修正」「サプライズ」「ポジティブ/ネガティブな要素」を300文字以内で要約してください。"
-        ]
-        response = model.generate_content(parts)
-        return response.text
-    except Exception as e:
-        return f"決算書読み込みエラー: {e}"
-
-# ---------------------------------------------------------
-# ルート設定
-# ---------------------------------------------------------
+# --- ルート設定 ---
 
 @app.route('/')
 def index():
+    """トップページ：銘柄リスト（最新のもの）を表示"""
     stocks_data = {}
     collection = get_db_collection()
+    
     if collection is not None:
-        cursor = collection.find({})
-        for doc in cursor:
-            if doc.get('code'):
-                stocks_data[doc['code']] = doc
+        # 銘柄ごとにグルーピングして、一番新しいデータを1つずつ取得する（集計クエリ）
+        pipeline = [
+            {"$sort": {"updated_at": -1}},
+            {"$group": {
+                "_id": "$code",
+                "doc": {"$first": "$$ROOT"}
+            }},
+            {"$replaceRoot": {"newRoot": "$doc"}},
+            {"$sort": {"updated_at": -1}}
+        ]
+        try:
+            cursor = collection.aggregate(pipeline)
+            for doc in cursor:
+                if doc.get('code'):
+                    # IDを文字列に変換しておく
+                    doc['_id'] = str(doc['_id'])
+                    stocks_data[doc['code']] = doc
+        except Exception as e:
+            print(f"集計エラー: {e}")
+
     return render_template('index.html', registered_envs=stocks_data)
 
-@app.route('/get_stock/<code_id>')
-def get_stock(code_id):
-    """API: 選択された銘柄情報を返す"""
+@app.route('/get_history/<code_id>')
+def get_history(code_id):
+    """指定した銘柄の履歴リスト（日時とID）を返す"""
     collection = get_db_collection()
-    if collection is None:
-        return jsonify({}), 500
-
-    data = collection.find_one({"code": code_id})
-    if data:
-        response_data = {k: v for k, v in data.items() if k != '_id'}
-        
-        # 画像有無フラグの設定
-        response_data['has_daily_chart'] = bool(response_data.get('daily_chart_b64'))
-        if 'daily_chart_b64' in response_data:
-            del response_data['daily_chart_b64']
-        
-        response_data['has_financial_info'] = bool(response_data.get('financial_text'))
-            
-        return jsonify(response_data)
+    if not collection: return jsonify([]), 500
     
+    # その銘柄のデータを新しい順に全部取得
+    cursor = collection.find({"code": code_id}, {"updated_at": 1, "_id": 1}).sort("updated_at", -1)
+    
+    history = []
+    for doc in cursor:
+        history.append({
+            "id": str(doc['_id']),
+            "date": doc['updated_at'].strftime('%Y/%m/%d %H:%M') if doc.get('updated_at') else "不明な日時"
+        })
+    return jsonify(history)
+
+@app.route('/get_log/<log_id>')
+def get_log(log_id):
+    """特定の履歴データの詳細を返す"""
+    collection = get_db_collection()
+    if not collection: return jsonify({}), 500
+    
+    try:
+        data = collection.find_one({"_id": ObjectId(log_id)})
+        if data:
+            resp = {k: v for k, v in data.items() if k != '_id'}
+            resp['id'] = str(data['_id']) # 文字列IDを含める
+            
+            # 画像有無フラグ
+            resp['has_daily'] = bool(resp.get('img_daily'))
+            resp['has_5min'] = bool(resp.get('img_5min'))
+            resp['has_board'] = bool(resp.get('img_board'))
+            
+            # 画像データは除外（軽量化）
+            if 'img_daily' in resp: del resp['img_daily']
+            if 'img_5min' in resp: del resp['img_5min']
+            if 'img_board' in resp: del resp['img_board']
+            
+            return jsonify(resp)
+    except Exception as e:
+        print(f"Log取得エラー: {e}")
+        
     return jsonify({}), 404
 
-@app.route('/register_stock', methods=['POST'])
-def register_stock():
-    """銘柄情報の登録・更新"""
+@app.route('/save_data', methods=['POST'])
+def save_data():
+    """データの保存（新規または上書き）"""
     try:
         collection = get_db_collection()
-        if collection is None:
-            flash('DB接続エラー', 'error')
-            return redirect(url_for('index'))
-            
-        code = request.form.get('reg_code')
-        if not code:
-            flash('銘柄コードは必須やで！', 'error')
+        if not collection:
+            flash('DBエラー', 'error')
             return redirect(url_for('index'))
 
-        existing_data = collection.find_one({"code": code}) or {}
+        code = request.form.get('code')
+        log_id = request.form.get('log_id') # 編集時はこれが入ってくる
         
-        update_data = {
+        if not code: return redirect(url_for('index'))
+
+        # ベースデータの構築
+        data = {
             "code": code,
-            "name": request.form.get('reg_name') or existing_data.get('name', ''),
-            "memo": request.form.get('reg_memo') or existing_data.get('memo', ''),
-            "news_text": existing_data.get('news_text', ''),
-            "saved_urls": existing_data.get('saved_urls', ''),
-            "financial_text": existing_data.get('financial_text', ''),
-            "daily_chart_b64": existing_data.get('daily_chart_b64', None),
-            "holding_qty": request.form.get('reg_holding_qty', '0'),
-            "avg_cost": request.form.get('reg_avg_cost', '0')
+            "name": request.form.get('name', ''),
+            "updated_at": datetime.datetime.now(),
+            "holding_qty": request.form.get('holding_qty', '0'),
+            "avg_cost": request.form.get('avg_cost', '0'),
+            "target_buy": request.form.get('target_buy', ''),
+            "target_sell": request.form.get('target_sell', ''),
+            "analysis_memo": request.form.get('analysis_memo', ''),
+            "memo": request.form.get('memo', ''),
+            "urls": request.form.get('urls', ''),
+            "news_content": "" # 後で設定
         }
 
+        # 編集モード（log_idあり）の場合、既存データを一度取得して画像などを引き継ぐ
+        existing_doc = {}
+        if log_id:
+            existing_doc = collection.find_one({"_id": ObjectId(log_id)}) or {}
+            # 既存のニュース内容を引き継ぎ（URL再取得しない場合のため）
+            data["news_content"] = existing_doc.get("news_content", "")
+        else:
+            # 新規の場合、同じ銘柄の「最新データ」から基本情報を引き継ぐと便利かも（今回はシンプルに空で）
+            pass
+
+        # ニュース取得ロジック
+        if data['urls']:
+            # URLが変わったか、強制更新したい場合だが、シンプルに毎回取得する
+            extracted = fetch_url_content(data['urls'])
+            if extracted:
+                data['news_content'] = extracted
+
         # 画像処理
-        daily_chart_file = request.files.get('reg_daily_chart')
-        if daily_chart_file and daily_chart_file.filename != '':
-            img = PIL.Image.open(daily_chart_file)
-            update_data['daily_chart_b64'] = image_to_base64(img)
+        for img_type in ['img_daily', 'img_5min', 'img_board']:
+            file = request.files.get(img_type)
+            if file and file.filename:
+                # 新しい画像がアップされたら変換
+                data[img_type] = image_to_base64(PIL.Image.open(file))
+            elif log_id and existing_doc:
+                # 編集モードで画像変更なしなら、既存の画像を維持
+                data[img_type] = existing_doc.get(img_type)
+            # 新規で画像なしならNoneのまま
 
-        # URL処理
-        url_mode = request.form.get('news_mode', 'append')
-        new_urls = request.form.get('reg_urls')
-        if new_urls:
-            scraped_text = fetch_url_content(new_urls)
-            if url_mode == 'overwrite':
-                update_data['news_text'] = scraped_text
-                update_data['saved_urls'] = new_urls
-            else:
-                current_news = update_data['news_text']
-                current_urls = update_data['saved_urls']
-                update_data['news_text'] = (current_news + "\n" + scraped_text) if current_news else scraped_text
-                update_data['saved_urls'] = (current_urls + "\n" + new_urls) if current_urls else new_urls
+        if log_id:
+            # 【編集モード】既存のレコードを上書き更新
+            collection.update_one({"_id": ObjectId(log_id)}, {"$set": data})
+            flash(f'履歴を修正・保存したで！ ({data["updated_at"].strftime("%H:%M")})', 'success')
+        else:
+            # 【新規モード】新しいレコードとして追加
+            collection.insert_one(data)
+            flash(f'新しい履歴を追加したで！ ({code})', 'success')
 
-        # 決算書処理
-        financial_mode = request.form.get('financial_mode', 'append')
-        financial_file = request.files.get('reg_financial_file')
-        if financial_file and financial_file.filename != '':
-            summary = summarize_financial_file(financial_file)
-            if financial_mode == 'overwrite':
-                update_data['financial_text'] = summary
-            else:
-                current = update_data['financial_text']
-                update_data['financial_text'] = (current + "\n[追加情報] " + summary) if current else summary
-
-        collection.update_one({"code": code}, {"$set": update_data}, upsert=True)
-        flash(f'銘柄 {code} を保存したで！', 'success')
-        
     except Exception as e:
-        print(f"Register Error: {e}")
-        flash(f'登録エラー: {e}', 'error')
+        print(e)
+        flash(f'保存エラー: {e}', 'error')
 
     return redirect(url_for('index'))
 
-@app.route('/judge', methods=['GET', 'POST'])
-def judge():
-    """AIジャッジ実行"""
-    if request.method == 'GET': return redirect(url_for('index'))
-
+@app.route('/delete_log', methods=['POST'])
+def delete_log():
+    """特定の履歴を削除"""
     try:
-        if not GENAI_API_KEY:
-            flash('APIキー設定してな！', 'error')
-            return redirect(url_for('index'))
-
-        code = request.form.get('stock_code')
-        extra_note = request.form.get('extra_note')
-        chart_file = request.files.get('chart_image') 
-        board_file = request.files.get('orderbook_image')
-
-        if not chart_file or not board_file:
-            flash('5分足と板画像は必須やで！', 'error')
-            return redirect(url_for('index'))
-
         collection = get_db_collection()
-        env_data = {}
-        if collection is not None:
-            env_data = collection.find_one({"code": code}) or {}
-        
-        qty = env_data.get('holding_qty', '0')
-        cost = env_data.get('avg_cost', '0')
-        
-        daily_chart_b64 = env_data.get('daily_chart_b64')
-        images_to_pass = [PIL.Image.open(chart_file), PIL.Image.open(board_file)]
-        
-        if daily_chart_b64:
-            images_to_pass.append(base64_to_image(daily_chart_b64))
-
-        prompt = f"""
-        あなたはプロのデイトレーダーです。以下の情報を統合しHTMLで売買判断を出力してください。
-        
-        【保有状況】
-        保有数: {qty}株
-        平均取得単価: {cost}円
-        
-        【環境認識データ】
-        銘柄名: {env_data.get('name', '不明')} ({code})
-        ニュース要約: {env_data.get('news_text', 'なし')}
-        決算/材料要約: {env_data.get('financial_text', 'なし')}
-        メモ: {env_data.get('memo', 'なし')}
-        今回メモ: {extra_note}
-
-        【指示】
-        出力は以下のHTML形式のみで行ってください。
-        
-        <div class="p-6 bg-white border-2 border-indigo-100 rounded-xl shadow-sm">
-            <div class="flex items-center justify-between mb-4 border-b pb-2">
-                <span class="text-gray-500 font-bold text-sm">AIジャッジ</span>
-                <span class="text-2xl font-black px-4 py-1 rounded bg-gray-800 text-white">
-                    {{ここに結論： 買い / 売り / ホールド / 様子見}}
-                </span>
-            </div>
-            
-            <div class="grid grid-cols-2 gap-4 mb-4">
-                <div class="bg-blue-50 p-3 rounded text-center">
-                    <p class="text-xs text-blue-800 font-bold mb-1">🎯 ターゲット</p>
-                    <p class="text-lg font-bold text-blue-900">{{利確価格}} 円</p>
-                </div>
-                <div class="bg-red-50 p-3 rounded text-center">
-                    <p class="text-xs text-red-800 font-bold mb-1">🛡️ 損切り</p>
-                    <p class="text-lg font-bold text-red-900">{{損切り価格}} 円</p>
-                </div>
-            </div>
-
-            <div class="mb-4">
-                 <h4 class="font-bold text-gray-700 mb-2">💡 アクション範囲</h4>
-                 <p class="text-lg font-bold text-indigo-700 bg-indigo-50 p-2 rounded text-center">
-                    {{具体的な価格帯}}
-                 </p>
-            </div>
-
-            <div class="space-y-2 text-sm text-gray-700 leading-relaxed">
-                <p><strong>根拠：</strong> {{5分足と板読みからの具体的な根拠}}</p>
-                <p><strong>環境認識：</strong> {{日足や材料を考慮した背景}}</p>
-            </div>
-        </div>
-        """
-
-        response = model.generate_content([prompt] + images_to_pass)
-        result_html = response.text.replace('```html', '').replace('```', '')
-        
-        stocks_data = {}
-        if collection is not None:
-            cursor = collection.find({})
-            for doc in cursor:
-                if doc.get('code'):
-                    stocks_data[doc['code']] = doc
-
-        return render_template('index.html', 
-                             judge_result=result_html,
-                             registered_envs=stocks_data,
-                             form_values={'stock_code': code, 'extra_note': extra_note})
-
+        log_id = request.form.get('delete_log_id')
+        if collection and log_id:
+            collection.delete_one({"_id": ObjectId(log_id)})
+            flash('履歴を1件削除したで', 'success')
     except Exception as e:
-        flash(f'エラー: {str(e)}', 'error')
-        return redirect(url_for('index'))
+        flash(f'削除エラー: {e}', 'error')
+    return redirect(url_for('index'))
+
+@app.route('/download_notebooklm/<log_id>')
+def download_notebooklm(log_id):
+    """特定ログの内容をテキスト化してダウンロード"""
+    collection = get_db_collection()
+    if not collection: return "DB Error", 500
+    
+    try:
+        data = collection.find_one({"_id": ObjectId(log_id)})
+        if not data: return "Data Not Found", 404
+
+        output = f"【銘柄分析データ: {data.get('name')} ({data.get('code')})】\n"
+        output += f"記録日時: {data.get('updated_at').strftime('%Y-%m-%d %H:%M')}\n\n"
+        
+        output += "■ 現在の保有状況\n"
+        output += f"- 保有株数: {data.get('holding_qty')}株\n"
+        output += f"- 平均取得単価: {data.get('avg_cost')}円\n\n"
+        
+        output += "■ ユーザーのメモ・環境認識\n"
+        output += f"{data.get('memo')}\n\n"
+        
+        output += "■ 関連ニュース・開示情報\n"
+        output += f"{data.get('news_content')}\n"
+        
+        return Response(
+            output,
+            mimetype="text/plain",
+            headers={"Content-disposition": f"attachment; filename={data.get('code')}_notebooklm.txt"}
+        )
+    except Exception as e:
+        return f"Error: {e}", 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
