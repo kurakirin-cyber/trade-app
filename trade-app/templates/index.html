@@ -8,156 +8,169 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
         body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; color: #1f2937; }
-        /* スクロールバー装飾 */
-        ::-webkit-scrollbar { width: 8px; }
+        /* スクロールバーを見やすく */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
     </style>
 </head>
-<body class="h-screen flex flex-col overflow-hidden">
+<body class="min-h-screen pb-12">
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-            <div class="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-lg px-4">
+            <div class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 w-11/12 max-w-lg">
                 {% for category, message in messages %}
-                    <div class="p-4 rounded-lg shadow-lg mb-2 flex justify-between items-center text-white {% if category == 'error' %}bg-red-500{% else %}bg-blue-600{% endif %}">
+                    <div class="p-4 rounded-lg shadow-xl mb-2 flex justify-between items-center text-white font-bold {% if category == 'error' %}bg-red-500{% else %}bg-blue-600{% endif %} fade-in">
                         <span>{{ message }}</span>
-                        <button onclick="this.parentElement.remove()" class="font-bold">×</button>
+                        <button onclick="this.parentElement.remove()">×</button>
                     </div>
                 {% endfor %}
             </div>
         {% endif %}
     {% endwith %}
 
-    <header class="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm z-10 flex-none">
-        <h1 class="text-xl font-bold text-gray-800 flex items-center gap-2">
-            <span>📈</span> トレード履歴管理 v4.0
-        </h1>
-        <button onclick="createNewLog()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
-            <span>＋ 完全新規作成</span>
-        </button>
+    <header class="bg-white border-b px-4 py-3 shadow-sm sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-lg md:text-xl font-bold text-gray-800 flex items-center gap-2">
+                <span>📈</span> <span class="hidden md:inline">トレード履歴管理</span><span class="md:hidden">トレード管理</span>
+            </h1>
+            <button onclick="createNewLog()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg shadow text-xs md:text-sm flex items-center gap-1">
+                <span>＋</span><span>新規作成</span>
+            </button>
+        </div>
     </header>
 
-    <div class="flex-1 flex overflow-hidden">
+    <div class="max-w-7xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        <div class="w-64 bg-white border-r flex-none flex flex-col">
-            <div class="p-3 bg-gray-50 border-b font-bold text-gray-500 text-xs">📂 銘柄選択</div>
-            <div class="flex-1 overflow-y-auto p-2 space-y-1">
-                {% if not registered_envs %}
-                    <p class="text-xs text-center text-gray-400 py-4">データなし</p>
-                {% endif %}
-                {% for code, data in registered_envs.items() %}
-                    <button onclick="selectStock('{{ code }}')" class="w-full text-left p-3 rounded hover:bg-blue-50 transition border border-transparent hover:border-blue-100 group">
-                        <div class="flex justify-between items-center">
-                            <span class="font-bold text-blue-800 text-lg">{{ code }}</span>
-                        </div>
-                        <div class="text-xs text-gray-500 truncate">{{ data.name }}</div>
+        <div class="lg:col-span-3 space-y-4">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="p-3 bg-gray-50 border-b font-bold text-gray-500 text-xs">📂 銘柄を選択</div>
+                <div class="max-h-48 lg:max-h-[70vh] overflow-y-auto p-2 space-y-1">
+                    {% if not registered_envs %}
+                        <p class="text-xs text-center text-gray-400 py-4">データなし</p>
+                    {% endif %}
+                    {% for code, data in registered_envs.items() %}
+                        <button onclick="selectStock('{{ code }}')" class="w-full text-left p-3 rounded hover:bg-blue-50 border border-transparent hover:border-blue-100 transition group">
+                            <div class="flex justify-between items-center">
+                                <span class="font-bold text-blue-800">{{ code }}</span>
+                                {% if data.holding_qty|int > 0 %}
+                                    <span class="bg-yellow-100 text-yellow-800 text-[10px] px-2 rounded-full">保有</span>
+                                {% endif %}
+                            </div>
+                            <div class="text-xs text-gray-500 truncate">{{ data.name }}</div>
+                        </button>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <div id="history_section" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden lg:block">
+                <div class="p-3 bg-gray-100 border-b font-bold text-gray-500 text-xs flex justify-between items-center">
+                    <span>🕒 履歴</span>
+                    <span id="selected_code_display" class="text-blue-600"></span>
+                </div>
+                <div class="p-2 border-b">
+                    <button onclick="createNewLogForStock()" id="add_new_btn" class="w-full bg-white border-2 border-dashed border-gray-300 text-gray-500 py-2 rounded hover:border-blue-400 hover:text-blue-500 transition text-xs font-bold disabled:opacity-50" disabled>
+                        ＋ この銘柄で記録追加
                     </button>
-                {% endfor %}
+                </div>
+                <div id="history_list" class="max-h-48 lg:max-h-[calc(70vh-100px)] overflow-y-auto p-2 space-y-1">
+                    <p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>
+                </div>
             </div>
         </div>
 
-        <div id="history_col" class="w-64 bg-gray-50 border-r flex-none flex flex-col hidden md:flex">
-            <div class="p-3 bg-gray-100 border-b font-bold text-gray-500 text-xs flex justify-between items-center">
-                <span>🕒 履歴一覧</span>
-                <span id="selected_code_display" class="text-blue-600"></span>
-            </div>
-            <div class="p-2 border-b">
-                <button onclick="createNewLogForStock()" id="add_new_btn" class="w-full bg-white border-2 border-dashed border-gray-300 text-gray-500 py-2 rounded hover:border-blue-400 hover:text-blue-500 transition text-sm font-bold disabled:opacity-50">
-                    ＋ この銘柄で新規記録
-                </button>
-            </div>
-            <div id="history_list" class="flex-1 overflow-y-auto p-2 space-y-2">
-                <p class="text-xs text-gray-400 text-center mt-4">銘柄を選択してください</p>
-            </div>
-        </div>
-
-        <div class="flex-1 bg-white flex flex-col overflow-hidden relative">
-            <form action="{{ url_for('save_data') }}" method="POST" enctype="multipart/form-data" class="flex-1 flex flex-col overflow-hidden">
-                <input type="hidden" name="log_id" id="log_id">
-                
-                <div class="border-b p-4 flex justify-between items-center bg-white flex-none">
-                    <div class="flex items-center gap-4">
-                        <div class="flex flex-col">
-                            <label class="text-[10px] font-bold text-gray-400">コード</label>
-                            <input type="text" name="code" id="code" class="border-b-2 border-gray-300 focus:border-blue-500 outline-none font-bold text-xl w-24 bg-transparent" placeholder="9984" required>
-                        </div>
-                        <div class="flex flex-col flex-1">
-                            <label class="text-[10px] font-bold text-gray-400">銘柄名</label>
-                            <input type="text" name="name" id="name" class="border-b border-gray-200 focus:border-blue-500 outline-none w-full bg-transparent" placeholder="銘柄名">
-                        </div>
-                    </div>
+        <div class="lg:col-span-9">
+            <div class="bg-white rounded-xl shadow-lg border-t-4 border-blue-600 overflow-hidden">
+                <form action="{{ url_for('save_data') }}" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="log_id" id="log_id">
                     
-                    <div class="flex gap-2">
-                        <button type="button" id="copy_btn" onclick="copyDataToClipboard()" class="hidden bg-gray-700 hover:bg-gray-800 text-white py-2 px-4 rounded shadow text-sm flex items-center gap-2">
-                            <span>📋 コピー</span>
-                        </button>
+                    <div class="border-b p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gray-50">
+                        <div class="flex items-center gap-4 w-full md:w-auto">
+                            <div class="flex flex-col">
+                                <label class="text-[10px] font-bold text-gray-400">コード</label>
+                                <input type="text" name="code" id="code" class="border-b-2 border-gray-300 focus:border-blue-500 outline-none font-bold text-xl w-24 bg-transparent" placeholder="9984" required>
+                            </div>
+                            <div class="flex flex-col flex-1">
+                                <label class="text-[10px] font-bold text-gray-400">銘柄名</label>
+                                <input type="text" name="name" id="name" class="border-b border-gray-200 focus:border-blue-500 outline-none w-full bg-transparent" placeholder="銘柄名">
+                            </div>
+                        </div>
                         
-                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded shadow flex items-center gap-2">
-                            <span>💾 保存</span>
-                        </button>
+                        <div class="flex gap-2 w-full md:w-auto justify-end">
+                            <button type="button" id="copy_btn" onclick="copyDataToClipboard()" class="hidden bg-gray-700 hover:bg-gray-800 text-white py-2 px-4 rounded shadow text-sm flex items-center gap-2">
+                                <span>📋</span><span class="hidden md:inline">コピー</span>
+                            </button>
+                            <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded shadow flex items-center gap-2">
+                                <span>💾 保存</span>
+                            </button>
+                        </div>
                     </div>
+
+                    <div class="p-4 md:p-6 space-y-6">
+                        
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
+                                <h3 class="text-xs font-bold text-yellow-800 mb-2">💰 保有状況</h3>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <input type="number" name="holding_qty" id="holding_qty" class="border p-2 rounded text-right w-full" placeholder="株数">
+                                    <input type="number" name="avg_cost" id="avg_cost" class="border p-2 rounded text-right w-full" placeholder="単価">
+                                </div>
+                            </div>
+                            <div class="bg-green-50 p-4 rounded-xl border border-green-200">
+                                <h3 class="text-xs font-bold text-green-800 mb-2">🎯 NotebookLM 戦略</h3>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <input type="text" name="target_buy" id="target_buy" class="border p-2 rounded text-center w-full" placeholder="買い狙い">
+                                    <input type="text" name="target_sell" id="target_sell" class="border p-2 rounded text-center w-full" placeholder="売り狙い">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">📝 環境認識・メモ</label>
+                                <textarea name="memo" id="memo" class="w-full border p-3 rounded-lg text-sm h-32 outline-none focus:border-blue-400" placeholder="気づきや考察..."></textarea>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">🤖 AI分析ログ</label>
+                                <textarea name="analysis_memo" id="analysis_memo" class="w-full border p-3 rounded-lg text-sm h-32 bg-green-50 border-green-200 outline-none focus:border-green-400" placeholder="AIの回答をここにコピペ..."></textarea>
+                            </div>
+                        </div>
+
+                        <div class="grid md:grid-cols-2 gap-4">
+                            <div class="space-y-2">
+                                <label class="block text-xs font-bold text-gray-500">📸 チャート画像</label>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
+                                        <span class="text-[10px] block">日足</span>
+                                        <input type="file" name="img_daily" class="hidden" onchange="preview(this, 's_daily')">
+                                        <div id="s_daily" class="text-gray-300 text-xs">未</div>
+                                    </label>
+                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
+                                        <span class="text-[10px] block">5分足</span>
+                                        <input type="file" name="img_5min" class="hidden" onchange="preview(this, 's_5min')">
+                                        <div id="s_5min" class="text-gray-300 text-xs">未</div>
+                                    </label>
+                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
+                                        <span class="text-[10px] block">板</span>
+                                        <input type="file" name="img_board" class="hidden" onchange="preview(this, 's_board')">
+                                        <div id="s_board" class="text-gray-300 text-xs">未</div>
+                                    </label>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-gray-500 mb-1">🔗 ニュースURL</label>
+                                <textarea name="urls" id="urls" class="w-full border p-2 rounded text-xs h-20" placeholder="https://..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+
+                <div class="bg-gray-50 p-4 border-t flex justify-end">
+                    <button onclick="deleteLog()" id="delete_btn" class="hidden text-red-500 text-xs hover:bg-red-50 px-3 py-1 rounded transition">
+                        🗑️ この履歴を削除
+                    </button>
                 </div>
-
-                <div class="flex-1 overflow-y-auto p-6 space-y-6">
-                    
-                    <div class="grid md:grid-cols-2 gap-6">
-                        <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-                            <h3 class="text-xs font-bold text-yellow-800 mb-2">💰 保有状況</h3>
-                            <div class="grid grid-cols-2 gap-2">
-                                <input type="number" name="holding_qty" id="holding_qty" class="border p-2 rounded text-right" placeholder="株数">
-                                <input type="number" name="avg_cost" id="avg_cost" class="border p-2 rounded text-right" placeholder="単価">
-                            </div>
-                        </div>
-                        <div class="bg-green-50 p-4 rounded-xl border border-green-200">
-                            <h3 class="text-xs font-bold text-green-800 mb-2">🎯 戦略 (NotebookLMの結果)</h3>
-                            <div class="grid grid-cols-2 gap-2">
-                                <input type="text" name="target_buy" id="target_buy" class="border p-2 rounded text-center" placeholder="買い狙い">
-                                <input type="text" name="target_sell" id="target_sell" class="border p-2 rounded text-center" placeholder="売り狙い">
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="grid md:grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">📝 環境認識・メモ</label>
-                            <textarea name="memo" id="memo" class="w-full border p-3 rounded-lg text-sm h-40 focus:ring-2 ring-blue-100 outline-none" placeholder="気づきや考察..."></textarea>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">🤖 AI分析ログ (コピペ用)</label>
-                            <textarea name="analysis_memo" id="analysis_memo" class="w-full border p-3 rounded-lg text-sm h-40 bg-green-50 focus:ring-2 ring-green-100 outline-none" placeholder="NotebookLMの回答をここに貼り付け..."></textarea>
-                        </div>
-                    </div>
-
-                    <div class="grid md:grid-cols-2 gap-4">
-                        <div class="space-y-2">
-                            <label class="block text-xs font-bold text-gray-500">📸 チャート画像 (クリックで変更)</label>
-                            <div class="flex gap-2">
-                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
-                                    日足<input type="file" name="img_daily" class="hidden" onchange="preview(this, 's_daily')">
-                                    <div id="s_daily" class="text-gray-300 mt-1">未</div>
-                                </label>
-                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
-                                    5分足<input type="file" name="img_5min" class="hidden" onchange="preview(this, 's_5min')">
-                                    <div id="s_5min" class="text-gray-300 mt-1">未</div>
-                                </label>
-                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
-                                    板<input type="file" name="img_board" class="hidden" onchange="preview(this, 's_board')">
-                                    <div id="s_board" class="text-gray-300 mt-1">未</div>
-                                </label>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">🔗 ニュースURL</label>
-                            <textarea name="urls" id="urls" class="w-full border p-2 rounded text-xs h-16" placeholder="https://..."></textarea>
-                        </div>
-                    </div>
-                </div>
-            </form>
-
-            <div class="absolute bottom-4 right-6">
-                <button onclick="deleteLog()" id="delete_btn" class="hidden text-red-400 text-xs hover:text-red-600 underline">
-                    この履歴を削除
-                </button>
             </div>
         </div>
     </div>
@@ -169,45 +182,62 @@
     <script>
         let currentCode = "";
 
-        // 銘柄選択時の処理
+        // スマホでも履歴セクションを表示させるための制御
+        function showHistorySection() {
+            const section = document.getElementById('history_section');
+            section.classList.remove('hidden'); // スマホでも表示
+            section.classList.add('block');
+        }
+
         async function selectStock(code) {
             currentCode = code;
             document.getElementById('selected_code_display').innerText = code;
             document.getElementById('add_new_btn').disabled = false;
             
-            // 履歴リストを取得
+            // スマホなら履歴エリアを表示させる
+            showHistorySection();
+
             const res = await fetch(`/get_history/${code}`);
             const list = await res.json();
             
             const listEl = document.getElementById('history_list');
-            listEl.innerHTML = ""; // クリア
+            listEl.innerHTML = "";
             
             if (list.length === 0) {
                 listEl.innerHTML = '<p class="text-xs text-gray-400 text-center">履歴なし</p>';
+                createNewLogForStock(); // データなければ新規モードへ
                 return;
             }
 
-            // 履歴ボタンを生成
             list.forEach((item, index) => {
                 const btn = document.createElement('button');
-                btn.className = "w-full text-left p-2 rounded text-sm hover:bg-white border border-transparent hover:border-gray-200 transition mb-1 " + (index === 0 ? "bg-blue-50 border-blue-100 font-bold" : "text-gray-600");
+                btn.className = "w-full text-left p-2 rounded text-sm hover:bg-blue-50 border border-transparent transition mb-1 " + (index === 0 ? "bg-blue-50 text-blue-800 font-bold border-blue-100" : "text-gray-600");
                 btn.innerHTML = `📅 ${item.date}`;
-                btn.onclick = () => loadLogDetail(item.id);
+                btn.onclick = () => {
+                    // 選択状態の見た目を更新
+                    Array.from(listEl.children).forEach(c => c.className = "w-full text-left p-2 rounded text-sm hover:bg-blue-50 text-gray-600 transition mb-1");
+                    btn.className = "w-full text-left p-2 rounded text-sm bg-blue-50 text-blue-800 font-bold border border-blue-100 transition mb-1";
+                    loadLogDetail(item.id);
+                };
                 listEl.appendChild(btn);
             });
 
-            // 最新のログを自動ロード
+            // 最新をロード
             if(list.length > 0) loadLogDetail(list[0].id);
         }
 
-        // 履歴詳細のロード
         async function loadLogDetail(id) {
             try {
+                // スマホで見やすいようにトップへスクロールしない方がいいかもだが、フォームへ移動
+                if(window.innerWidth < 1024) {
+                    // スマホならフォームの位置まで少しスクロール
+                    // document.getElementById('code').scrollIntoView({behavior: 'smooth'});
+                }
+
                 const res = await fetch(`/get_log/${id}`);
                 if (!res.ok) return;
                 const data = await res.json();
                 
-                // フォームに値をセット
                 document.getElementById('log_id').value = data.id;
                 document.getElementById('code').value = data.code;
                 document.getElementById('name').value = data.name || "";
@@ -219,79 +249,79 @@
                 document.getElementById('analysis_memo').value = data.analysis_memo || "";
                 document.getElementById('urls').value = data.urls || "";
 
-                // 画像状態
                 const setImg = (eid, has) => {
                     const el = document.getElementById(eid);
                     el.innerText = has ? "✅ 済" : "未";
-                    el.className = has ? "text-green-600 font-bold mt-1" : "text-gray-300 mt-1";
+                    el.className = has ? "text-green-600 font-bold text-xs" : "text-gray-300 text-xs";
                 };
                 setImg('s_daily', data.has_daily);
                 setImg('s_5min', data.has_5min);
                 setImg('s_board', data.has_board);
 
-                // ボタン表示制御
                 document.getElementById('delete_btn').classList.remove('hidden');
                 document.getElementById('copy_btn').classList.remove('hidden');
                 
             } catch(e) { console.error(e); }
         }
 
-        // 新規作成（現在選択中の銘柄で）
         function createNewLogForStock() {
             if(!currentCode) return;
-            document.getElementById('log_id').value = ""; // IDを空にする＝新規扱い
-            // 銘柄コードと名前以外をクリア
-            // document.getElementById('memo').value = ""; // メモは残す？消す？今回は消す
-            // 日付が変わるので新規データとして保存される
-            alert("✨ 新しい日時で記録を作成します。\n内容を入力して「保存」を押してください。");
+            document.getElementById('log_id').value = ""; 
+            // フォームをクリア（コードと名前以外）
             document.getElementById('memo').value = "";
             document.getElementById('analysis_memo').value = "";
             document.getElementById('copy_btn').classList.add('hidden');
             document.getElementById('delete_btn').classList.add('hidden');
+            // 画像状態リセット
+            ['s_daily', 's_5min', 's_board'].forEach(id => {
+                document.getElementById(id).innerText = "未";
+                document.getElementById(id).className = "text-gray-300 text-xs";
+            });
         }
 
-        // 完全新規作成
         function createNewLog() {
             currentCode = "";
-            document.getElementById('history_list').innerHTML = "";
+            document.getElementById('history_list').innerHTML = '<p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>';
+            document.getElementById('selected_code_display').innerText = "";
+            document.getElementById('add_new_btn').disabled = true;
+            
             document.getElementById('log_id').value = "";
             document.getElementById('code').value = "";
             document.getElementById('name').value = "";
             document.getElementById('memo').value = "";
-            // 全フィールドクリア...
             ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
             
             document.getElementById('copy_btn').classList.add('hidden');
             document.getElementById('delete_btn').classList.add('hidden');
         }
 
-        // 削除
         function deleteLog() {
             const id = document.getElementById('log_id').value;
             if(!id) return;
-            if(confirm("この履歴データを削除しますか？")) {
+            if(confirm("ほんまに削除してええか？")) {
                 document.getElementById('delete_log_id').value = id;
                 document.getElementById('deleteForm').submit();
             }
         }
 
-        // クリップボードコピー
         async function copyDataToClipboard() {
             const id = document.getElementById('log_id').value;
             if(!id) return;
-            const res = await fetch(`/download_notebooklm/${id}`);
-            if(res.ok) {
-                const text = await res.text();
-                await navigator.clipboard.writeText(text);
-                alert("✅ コピーしました！");
-            }
+            try {
+                const res = await fetch(`/download_notebooklm/${id}`);
+                if(res.ok) {
+                    const text = await res.text();
+                    await navigator.clipboard.writeText(text);
+                    alert("✅ コピーしたで！\nNotebookLMに貼り付けてな。");
+                }
+            } catch(e) { alert("コピー失敗や..." + e); }
         }
 
         function preview(input, id) {
             if(input.files[0]) {
                 const el = document.getElementById(id);
                 el.innerText = "✅ 選択";
-                el.className = "text-blue-600 font-bold mt-1";
+                el.className = "text-blue-600 font-bold text-xs";
             }
         }
     </script>
