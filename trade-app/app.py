@@ -9,21 +9,20 @@ from dotenv import load_dotenv
 import PIL.Image
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from bson.errors import InvalidId
 
 load_dotenv()
 
 app = Flask(__name__)
-# 環境変数がない場合はフォールバック（本番では必ず環境変数を設定してな）
 app.secret_key = os.getenv("SECRET_KEY", "default_dev_secret_key")
 
-# --- MongoDBの設定 (接続をグローバルで保持) ---
+# --- MongoDBの設定 ---
 MONGO_URI = os.getenv("MONGO_URI")
 mongo_client = None
 mongo_db = None
 
 if MONGO_URI:
     try:
-        # connect=Falseでフォーク時の接続エラーを回避（Gunicorn対策）
         mongo_client = MongoClient(MONGO_URI, connect=False)
         mongo_db = mongo_client['stock_app_db']
         print("✅ MongoDB接続成功")
@@ -53,20 +52,17 @@ def fetch_url_content(url_text):
     }
     for url in raw_urls:
         try:
-            # timeoutを3秒に短縮（サーバー負荷軽減とレスポンス向上）
             resp = requests.get(url, headers=headers, timeout=3)
             if resp.status_code == 200:
                 resp.encoding = resp.apparent_encoding
                 soup = BeautifulSoup(resp.content, 'html.parser')
-                # ノイズ除去
                 for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'svg']):
                     tag.decompose()
                 text = soup.get_text(separator='\n', strip=True)
-                combined_text += f"\n--- [記事: {url}] ---\n{text[:2000]}...\n" # 文字数制限も少しきつくして軽量化
+                combined_text += f"\n--- [記事: {url}] ---\n{text[:2000]}...\n"
             else:
                 combined_text += f"\n[URL: {url}] アクセス不可 ({resp.status_code})\n"
         except Exception as e:
-            # エラーでも止まらず次へ
             combined_text += f"\n[URL: {url}] 取得スキップ: {str(e)[:50]}...\n"
     return combined_text
 
@@ -78,7 +74,6 @@ def index():
     collection = get_db_collection()
     
     if collection is not None:
-        # 最新のデータを1銘柄につき1つ取得
         pipeline = [
             {"$sort": {"updated_at": -1}},
             {"$group": {
@@ -93,7 +88,7 @@ def index():
             for doc in cursor:
                 if doc.get('code'):
                     doc['_id'] = str(doc['_id'])
-                    # Base64画像データは重いので一覧には含めない
+                    # Base64画像は一覧には含めない
                     if 'img_daily' in doc: del doc['img_daily']
                     if 'img_5min' in doc: del doc['img_5min']
                     if 'img_board' in doc: del doc['img_board']
@@ -108,14 +103,17 @@ def get_history(code_id):
     collection = get_db_collection()
     if collection is None: return jsonify([]), 500
     
-    # 必要なフィールドだけ取得して軽量化
     cursor = collection.find({"code": code_id}, {"updated_at": 1, "_id": 1}).sort("updated_at", -1)
     
     history = []
     for doc in cursor:
+        date_str = "不明な日時"
+        if doc.get('updated_at'):
+            date_str = doc['updated_at'].strftime('%Y/%m/%d %H:%M')
+            
         history.append({
             "id": str(doc['_id']),
-            "date": doc['updated_at'].strftime('%Y/%m/%d %H:%M') if doc.get('updated_at') else "不明な日時"
+            "date": date_str
         })
     return jsonify(history)
 
@@ -130,12 +128,10 @@ def get_log(log_id):
             resp = {k: v for k, v in data.items() if k != '_id'}
             resp['id'] = str(data['_id'])
             
-            # 画像データそのものは送らず、存在フラグだけ送る
             resp['has_daily'] = bool(resp.get('img_daily'))
             resp['has_5min'] = bool(resp.get('img_5min'))
             resp['has_board'] = bool(resp.get('img_board'))
             
-            # ペイロード削減のため画像バイナリは削除
             if 'img_daily' in resp: del resp['img_daily']
             if 'img_5min' in resp: del resp['img_5min']
             if 'img_board' in resp: del resp['img_board']
@@ -146,7 +142,6 @@ def get_log(log_id):
         
     return jsonify({}), 404
 
-# 画像表示用の新ルート
 @app.route('/image/<log_id>/<img_type>')
 def get_image(log_id, img_type):
     collection = get_db_collection()
@@ -197,29 +192,23 @@ def save_data():
         if log_id:
             existing_doc = collection.find_one({"_id": ObjectId(log_id)}) or {}
             
-            # URLが変わってない、かつニュース取得済みなら、再スクレイピングせずに使い回す（時短）
             old_urls = existing_doc.get("urls", "").strip()
             old_content = existing_doc.get("news_content", "")
             
             if new_urls == old_urls and old_content:
                 data["news_content"] = old_content
             else:
-                # URLが変わった or 初回 なら取得
                 if new_urls:
                     data['news_content'] = fetch_url_content(new_urls)
         else:
-            # 新規作成時
             if new_urls:
                 data['news_content'] = fetch_url_content(new_urls)
 
-        # 画像処理
         for img_type in ['img_daily', 'img_5min', 'img_board']:
             file = request.files.get(img_type)
             if file and file.filename:
-                # 新しい画像がアップされたら保存
                 data[img_type] = image_to_base64(PIL.Image.open(file))
             elif log_id and existing_doc:
-                # アップされず、既存データがあるなら維持
                 data[img_type] = existing_doc.get(img_type)
 
         if log_id:
@@ -253,21 +242,29 @@ def download_notebooklm(log_id):
     if collection is None: return "DB Error", 500
     
     try:
+        if not log_id: raise ValueError("IDが空や")
+        
         data = collection.find_one({"_id": ObjectId(log_id)})
         if not data: return "Data Not Found", 404
 
-        output = f"【銘柄分析データ: {data.get('name')} ({data.get('code')})】\n"
-        output += f"記録日時: {data.get('updated_at').strftime('%Y-%m-%d %H:%M')}\n\n"
+        # 日付処理の安全対策
+        date_str = "不明"
+        if data.get('updated_at'):
+            date_str = data.get('updated_at').strftime('%Y-%m-%d %H:%M')
+
+        output = f"【銘柄分析データ: {data.get('name', '名称未設定')} ({data.get('code', 'NoCode')})】\n"
+        output += f"記録日時: {date_str}\n\n"
         
         output += "■ 現在の保有状況\n"
-        output += f"- 保有株数: {data.get('holding_qty')}株\n"
-        output += f"- 平均取得単価: {data.get('avg_cost')}円\n\n"
+        output += f"- 保有株数: {data.get('holding_qty', '0')}株\n"
+        output += f"- 平均取得単価: {data.get('avg_cost', '0')}円\n\n"
         
         output += "■ ユーザーのメモ・環境認識\n"
-        output += f"{data.get('memo')}\n\n"
+        output += f"{data.get('memo', '')}\n\n"
         
         output += "■ 関連ニュース・開示情報\n"
-        output += f"{data.get('news_content')}\n"
+        news = data.get('news_content', '')
+        output += f"{news if news else '（ニュース情報なし）'}\n"
         
         output += "\n" + "="*30 + "\n"
         output += "■ NotebookLMへの指示 (System Prompt)\n"
@@ -281,7 +278,10 @@ def download_notebooklm(log_id):
             mimetype="text/plain",
             headers={"Content-disposition": f"attachment; filename={data.get('code')}_notebooklm.txt"}
         )
+    except InvalidId:
+        return "Error: 無効なID形式です", 400
     except Exception as e:
+        print(f"Copy Error: {e}")
         return f"Error: {e}", 500
 
 if __name__ == '__main__':
