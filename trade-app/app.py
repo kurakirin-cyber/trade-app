@@ -34,16 +34,46 @@ def get_db_collection():
         return mongo_db['stocks']
     return None
 
-# --- 画像処理 ---
+# --- ヘルパー関数 ---
+
 def image_to_base64(img):
+    """画像をBase64に変換"""
     img = img.convert('RGB')
     img.thumbnail((1024, 1024)) 
     buffered = io.BytesIO()
     img.save(buffered, format="JPEG", quality=70)
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-# --- ニュース本文抽出 ---
+def shorten_url_api(long_url):
+    """TinyURLを使ってURLを短縮する"""
+    if not long_url or len(long_url) < 30: return long_url # 短いならそのまま
+    try:
+        # タイムアウト1秒でサクッと取得
+        api_url = f"http://tinyurl.com/api-create.php?url={long_url}"
+        res = requests.get(api_url, timeout=2)
+        if res.status_code == 200:
+            return res.text
+    except:
+        pass # 失敗したら元のURLを返す
+    return long_url
+
+def process_urls(url_text):
+    """URL欄のテキストを改行で分けて、それぞれ短縮処理する"""
+    if not url_text: return ""
+    urls = [u.strip() for u in url_text.split('\n') if u.strip()]
+    shortened_list = []
+    
+    # 全部短縮APIにかける（少し時間がかかるので注意）
+    for u in urls:
+        if u.startswith('http'):
+            shortened_list.append(shorten_url_api(u))
+        else:
+            shortened_list.append(u)
+            
+    return '\n'.join(shortened_list)
+
 def fetch_url_content(url_text):
+    """ニュース本文抽出"""
     if not url_text: return ""
     raw_urls = [u.strip() for u in url_text.split('\n') if u.strip().startswith('http')]
     combined_text = ""
@@ -73,6 +103,9 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
+    # 保存直後のリダイレクトで指定された銘柄コードを受け取る
+    active_code = request.args.get('active_code', '')
+
     if collection is not None:
         pipeline = [
             {"$sort": {"updated_at": -1}},
@@ -88,14 +121,14 @@ def index():
             for doc in cursor:
                 if doc.get('code'):
                     doc['_id'] = str(doc['_id'])
-                    if 'img_daily' in doc: del doc['img_daily']
-                    if 'img_5min' in doc: del doc['img_5min']
-                    if 'img_board' in doc: del doc['img_board']
+                    # 重いデータは一覧から除外
+                    for heavy_key in ['img_daily', 'img_5min', 'img_board', 'pdf_file']:
+                        if heavy_key in doc: del doc[heavy_key]
                     stocks_data[doc['code']] = doc
         except Exception as e:
             print(f"集計エラー: {e}")
 
-    return render_template('index.html', registered_envs=stocks_data)
+    return render_template('index.html', registered_envs=stocks_data, active_code=active_code)
 
 @app.route('/get_history/<code_id>')
 def get_history(code_id):
@@ -103,17 +136,12 @@ def get_history(code_id):
     if collection is None: return jsonify([]), 500
     
     cursor = collection.find({"code": code_id}, {"updated_at": 1, "_id": 1}).sort("updated_at", -1)
-    
     history = []
     for doc in cursor:
         date_str = "不明な日時"
         if doc.get('updated_at'):
             date_str = doc['updated_at'].strftime('%Y/%m/%d %H:%M')
-            
-        history.append({
-            "id": str(doc['_id']),
-            "date": date_str
-        })
+        history.append({"id": str(doc['_id']), "date": date_str})
     return jsonify(history)
 
 @app.route('/get_log/<log_id>')
@@ -127,13 +155,15 @@ def get_log(log_id):
             resp = {k: v for k, v in data.items() if k != '_id'}
             resp['id'] = str(data['_id'])
             
+            # バイナリデータ有無フラグ
             resp['has_daily'] = bool(resp.get('img_daily'))
             resp['has_5min'] = bool(resp.get('img_5min'))
             resp['has_board'] = bool(resp.get('img_board'))
+            resp['has_pdf']   = bool(resp.get('pdf_file')) # PDFフラグ追加
             
-            if 'img_daily' in resp: del resp['img_daily']
-            if 'img_5min' in resp: del resp['img_5min']
-            if 'img_board' in resp: del resp['img_board']
+            # データ本体は削除して軽量化
+            for heavy_key in ['img_daily', 'img_5min', 'img_board', 'pdf_file']:
+                if heavy_key in resp: del resp[heavy_key]
             
             return jsonify(resp)
     except Exception as e:
@@ -141,50 +171,67 @@ def get_log(log_id):
         
     return jsonify({}), 404
 
-@app.route('/image/<log_id>/<img_type>')
-def get_image(log_id, img_type):
+@app.route('/file/<log_id>/<file_type>')
+def get_file(log_id, file_type):
+    """画像またはPDFをダウンロード/表示する"""
     collection = get_db_collection()
     if collection is None: return "DB Error", 500
     
-    if img_type not in ['img_daily', 'img_5min', 'img_board']:
-        return "Invalid Image Type", 400
+    # 許可するフィールド名
+    allowed_types = ['img_daily', 'img_5min', 'img_board', 'pdf_file']
+    if file_type not in allowed_types: return "Invalid Type", 400
 
     try:
-        data = collection.find_one({"_id": ObjectId(log_id)}, {img_type: 1})
-        if data and data.get(img_type):
-            img_data = base64.b64decode(data[img_type])
-            return send_file(io.BytesIO(img_data), mimetype='image/jpeg')
+        data = collection.find_one({"_id": ObjectId(log_id)}, {file_type: 1, "code": 1})
+        if data and data.get(file_type):
+            file_data = base64.b64decode(data[file_type])
+            
+            # PDFの場合
+            if file_type == 'pdf_file':
+                return Response(
+                    file_data,
+                    mimetype='application/pdf',
+                    headers={"Content-Disposition": f"inline; filename={data.get('code')}_doc.pdf"}
+                )
+            # 画像の場合
+            else:
+                return send_file(io.BytesIO(file_data), mimetype='image/jpeg')
         else:
-            return "Image Not Found", 404
+            return "File Not Found", 404
     except Exception as e:
         return f"Error: {e}", 500
 
 @app.route('/save_data', methods=['POST'])
 def save_data():
-    try:
-        collection = get_db_collection()
-        if collection is None:
-            flash('DBエラー: 接続できてへんで', 'error')
-            return redirect(url_for('index'))
+    collection = get_db_collection()
+    if collection is None:
+        flash('DBエラー: 接続できてへんで', 'error')
+        return redirect(url_for('index'))
 
+    try:
         code = request.form.get('code')
         log_id = request.form.get('log_id')
-        new_urls = request.form.get('urls', '').strip()
+        raw_urls = request.form.get('urls', '').strip()
         
         if not code: return redirect(url_for('index'))
+
+        # URLの自動短縮処理
+        # (新規保存、またはURLが変更された時のみ実行してAPI負荷を下げる)
+        # 簡易的に「とりあえず毎回短縮試行」する形にする（既存の短いURLはそのまま返るため）
+        processed_urls = process_urls(raw_urls)
 
         data = {
             "code": code,
             "name": request.form.get('name', ''),
             "updated_at": datetime.datetime.now(),
-            "current_price": request.form.get('current_price', ''), # ここに追加！
+            "current_price": request.form.get('current_price', ''), # 現在値
             "holding_qty": request.form.get('holding_qty', '0'),
             "avg_cost": request.form.get('avg_cost', '0'),
             "target_buy": request.form.get('target_buy', ''),
             "target_sell": request.form.get('target_sell', ''),
             "analysis_memo": request.form.get('analysis_memo', ''),
             "memo": request.form.get('memo', ''),
-            "urls": new_urls,
+            "urls": processed_urls, # 短縮済みのURLを保存
             "news_content": ""
         }
 
@@ -192,18 +239,23 @@ def save_data():
         if log_id:
             existing_doc = collection.find_one({"_id": ObjectId(log_id)}) or {}
             
+            # ニュース本文の再取得判定
             old_urls = existing_doc.get("urls", "").strip()
             old_content = existing_doc.get("news_content", "")
             
-            if new_urls == old_urls and old_content:
-                data["news_content"] = old_content
-            else:
-                if new_urls:
-                    data['news_content'] = fetch_url_content(new_urls)
+            # URLが変わってないなら記事本文は使い回す
+            # (processed_urlsと比較すると短縮前後でズレるので、raw_urlsも考慮したいが、
+            #  シンプルに「URL欄が空でなければ取得」にする)
+            if raw_urls and (processed_urls != old_urls):
+                 data['news_content'] = fetch_url_content(raw_urls)
+            elif old_content:
+                 data['news_content'] = old_content
         else:
-            if new_urls:
-                data['news_content'] = fetch_url_content(new_urls)
+            # 新規
+            if raw_urls:
+                data['news_content'] = fetch_url_content(raw_urls)
 
+        # 画像保存
         for img_type in ['img_daily', 'img_5min', 'img_board']:
             file = request.files.get(img_type)
             if file and file.filename:
@@ -211,30 +263,54 @@ def save_data():
             elif log_id and existing_doc:
                 data[img_type] = existing_doc.get(img_type)
 
+        # PDF保存
+        pdf = request.files.get('pdf_file')
+        if pdf and pdf.filename:
+            # サイズチェック (例えば10MB制限)
+            pdf.seek(0, os.SEEK_END)
+            size = pdf.tell()
+            if size > 10 * 1024 * 1024:
+                flash('PDFデカすぎや！10MB以下にしてな', 'error')
+                # PDF以外は保存せず戻る（あるいはPDFだけ無視するか）
+                # ここでは安全のため処理を中断してリダイレクト
+                return redirect(url_for('index', active_code=code))
+            
+            pdf.seek(0)
+            data['pdf_file'] = base64.b64encode(pdf.read()).decode('utf-8')
+        elif log_id and existing_doc:
+             data['pdf_file'] = existing_doc.get('pdf_file')
+
         if log_id:
             collection.update_one({"_id": ObjectId(log_id)}, {"$set": data})
-            flash(f'履歴を修正・保存したで！', 'success')
+            flash(f'修正保存したで！（URL短縮済）', 'success')
         else:
             collection.insert_one(data)
-            flash(f'新しい履歴を追加したで！', 'success')
+            flash(f'新規追加したで！（URL短縮済）', 'success')
 
     except Exception as e:
         print(e)
         flash(f'保存エラー: {e}', 'error')
 
-    return redirect(url_for('index'))
+    # 【重要】保存していた銘柄コードをパラメータとして渡してリダイレクト
+    return redirect(url_for('index', active_code=code))
 
 @app.route('/delete_log', methods=['POST'])
 def delete_log():
+    code = ""
     try:
         collection = get_db_collection()
         log_id = request.form.get('delete_log_id')
         if collection is not None and log_id:
+            # 削除前にコードを取得（リダイレクト用）
+            doc = collection.find_one({"_id": ObjectId(log_id)})
+            if doc: code = doc.get('code', '')
+            
             collection.delete_one({"_id": ObjectId(log_id)})
             flash('履歴を1件削除したで', 'success')
     except Exception as e:
         flash(f'削除エラー: {e}', 'error')
-    return redirect(url_for('index'))
+    
+    return redirect(url_for('index', active_code=code))
 
 @app.route('/download_notebooklm/<log_id>')
 def download_notebooklm(log_id):
@@ -243,7 +319,6 @@ def download_notebooklm(log_id):
     
     try:
         if not log_id: raise ValueError("IDが空や")
-        
         data = collection.find_one({"_id": ObjectId(log_id)})
         if not data: return "Data Not Found", 404
 
@@ -255,14 +330,19 @@ def download_notebooklm(log_id):
         output += f"記録日時: {date_str}\n\n"
         
         output += "■ 価格・保有状況\n"
-        output += f"- 現在値（市場価格）: {data.get('current_price', '不明')}円\n" # ここに追加！
+        output += f"- 現在値: {data.get('current_price', '不明')}円\n"
         output += f"- 保有株数: {data.get('holding_qty', '0')}株\n"
         output += f"- 平均取得単価: {data.get('avg_cost', '0')}円\n\n"
         
         output += "■ ユーザーのメモ・環境認識\n"
         output += f"{data.get('memo', '')}\n\n"
         
-        output += "■ 関連ニュース・開示情報\n"
+        # PDF添付の有無をAIに伝える
+        if data.get('pdf_file'):
+            output += "※このデータには決算書などのPDFファイルが添付されています。人間は確認できますが、このテキストデータには含まれていません。\n\n"
+
+        output += "■ 関連ニュース・開示情報 (URL短縮済)\n"
+        output += f"URLリスト: {data.get('urls', '')}\n" # URLも出力
         news = data.get('news_content', '')
         output += f"{news if news else '（ニュース情報なし）'}\n"
         
@@ -278,10 +358,7 @@ def download_notebooklm(log_id):
             mimetype="text/plain",
             headers={"Content-disposition": f"attachment; filename={data.get('code')}_notebooklm.txt"}
         )
-    except InvalidId:
-        return "Error: 無効なID形式です", 400
     except Exception as e:
-        print(f"Copy Error: {e}")
         return f"Error: {e}", 500
 
 if __name__ == '__main__':
