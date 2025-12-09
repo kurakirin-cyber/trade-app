@@ -12,7 +12,6 @@
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-        /* 読み込み中オーバーレイ */
         #loading_overlay { display: none; }
         #loading_overlay.active { display: flex; }
     </style>
@@ -53,22 +52,19 @@
         <div class="lg:col-span-3 space-y-4">
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="p-3 bg-gray-50 border-b font-bold text-gray-500 text-xs">📂 銘柄を選択</div>
-                <div class="max-h-48 lg:max-h-[70vh] overflow-y-auto p-2 space-y-1">
-                    {% if not registered_envs %}
-                        <p class="text-xs text-center text-gray-400 py-4">データなし</p>
-                    {% endif %}
-                    {% for code, data in registered_envs.items() %}
-                        <button onclick="selectStock('{{ code }}')" class="w-full text-left p-3 rounded hover:bg-blue-50 border border-transparent hover:border-blue-100 transition group">
-                            <div class="flex justify-between items-center">
-                                <span class="font-bold text-blue-800">{{ code }}</span>
-                                {% if data.holding_qty|int > 0 %}
-                                    <span class="bg-yellow-100 text-yellow-800 text-[10px] px-2 rounded-full">保有</span>
-                                {% endif %}
-                            </div>
-                            <div class="text-xs text-gray-500 truncate">{{ data.name }}</div>
-                        </button>
-                    {% endfor %}
+                
+                <div class="p-3 bg-white">
+                    <select id="stock_selector" onchange="selectStock(this.value)" class="w-full border border-gray-300 rounded p-2 text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
+                        <option value="">-- 銘柄を選択 --</option>
+                        {% for code, data in registered_envs.items() %}
+                            <option value="{{ code }}">
+                                {{ code }} : {{ data.name }}
+                                {% if data.holding_qty|int > 0 %}(保有){% endif %}
+                            </option>
+                        {% endfor %}
+                    </select>
                 </div>
+
             </div>
 
             <div id="history_section" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden lg:block">
@@ -81,7 +77,7 @@
                         ＋ この銘柄で記録追加
                     </button>
                 </div>
-                <div id="history_list" class="max-h-48 lg:max-h-[calc(70vh-100px)] overflow-y-auto p-2 space-y-1">
+                <div id="history_list" class="max-h-48 lg:max-h-[calc(70vh-200px)] overflow-y-auto p-2 space-y-1">
                     <p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>
                 </div>
             </div>
@@ -210,11 +206,16 @@
         }
 
         async function selectStock(code) {
+            if(!code) return; // 選択解除時など
+
             currentCode = code;
             document.getElementById('selected_code_display').innerText = code;
             document.getElementById('add_new_btn').disabled = false;
             
             showHistorySection();
+
+            // コンボボックスの値も同期（ボタン経由とかで呼ばれた場合用）
+            document.getElementById('stock_selector').value = code;
 
             const res = await fetch(`/get_history/${code}`);
             const list = await res.json();
@@ -260,7 +261,6 @@
                 document.getElementById('analysis_memo').value = data.analysis_memo || "";
                 document.getElementById('urls').value = data.urls || "";
 
-                // 画像状態のリセットと表示設定
                 const setupImg = (type, has) => {
                     const statusEl = document.getElementById('s_' + type.split('_')[1]);
                     const btnEl = document.getElementById('btn_view_' + type.split('_')[1]);
@@ -295,6 +295,7 @@
 
         function createNewLog() {
             currentCode = "";
+            document.getElementById('stock_selector').value = ""; // 選択リセット
             document.getElementById('history_list').innerHTML = '<p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>';
             document.getElementById('selected_code_display').innerText = "";
             document.getElementById('add_new_btn').disabled = true;
@@ -308,7 +309,6 @@
             document.getElementById('memo').value = "";
             ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
             
-            // 画像関連のリセット
             ['daily', '5min', 'board'].forEach(type => {
                 document.getElementById('s_' + type).innerText = "未";
                 document.getElementById('s_' + type).className = "text-gray-300 text-xs mt-1";
@@ -330,15 +330,26 @@
 
         async function copyDataToClipboard() {
             const id = document.getElementById('log_id').value;
-            if(!id) return;
+            
+            if(!id) {
+                alert("⚠️ まだ保存されてへんで！\n一度「保存」してからコピーしてな。");
+                return;
+            }
+
             try {
                 const res = await fetch(`/download_notebooklm/${id}`);
+                
                 if(res.ok) {
                     const text = await res.text();
                     await navigator.clipboard.writeText(text);
                     alert("✅ コピーしたで！\nNotebookLMに貼り付けてな。");
+                } else {
+                    const errorText = await res.text();
+                    alert(`❌ コピー失敗や...\nエラー: ${errorText}\n(ステータス: ${res.status})`);
                 }
-            } catch(e) { alert("コピー失敗や..." + e); }
+            } catch(e) { 
+                alert("❌ 接続エラーや...\n" + e);
+            }
         }
 
         function preview(input, id) {
