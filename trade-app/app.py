@@ -88,7 +88,6 @@ def index():
             for doc in cursor:
                 if doc.get('code'):
                     doc['_id'] = str(doc['_id'])
-                    # Base64画像は一覧には含めない
                     if 'img_daily' in doc: del doc['img_daily']
                     if 'img_5min' in doc: del doc['img_5min']
                     if 'img_board' in doc: del doc['img_board']
@@ -178,6 +177,7 @@ def save_data():
             "code": code,
             "name": request.form.get('name', ''),
             "updated_at": datetime.datetime.now(),
+            "current_price": request.form.get('current_price', ''), # ここに追加！
             "holding_qty": request.form.get('holding_qty', '0'),
             "avg_cost": request.form.get('avg_cost', '0'),
             "target_buy": request.form.get('target_buy', ''),
@@ -247,7 +247,6 @@ def download_notebooklm(log_id):
         data = collection.find_one({"_id": ObjectId(log_id)})
         if not data: return "Data Not Found", 404
 
-        # 日付処理の安全対策
         date_str = "不明"
         if data.get('updated_at'):
             date_str = data.get('updated_at').strftime('%Y-%m-%d %H:%M')
@@ -255,7 +254,8 @@ def download_notebooklm(log_id):
         output = f"【銘柄分析データ: {data.get('name', '名称未設定')} ({data.get('code', 'NoCode')})】\n"
         output += f"記録日時: {date_str}\n\n"
         
-        output += "■ 現在の保有状況\n"
+        output += "■ 価格・保有状況\n"
+        output += f"- 現在値（市場価格）: {data.get('current_price', '不明')}円\n" # ここに追加！
         output += f"- 保有株数: {data.get('holding_qty', '0')}株\n"
         output += f"- 平均取得単価: {data.get('avg_cost', '0')}円\n\n"
         
@@ -269,8 +269,8 @@ def download_notebooklm(log_id):
         output += "\n" + "="*30 + "\n"
         output += "■ NotebookLMへの指示 (System Prompt)\n"
         output += "あなたはプロの株式トレーダーのアシスタントです。上記のデータを分析し、以下の点について具体的な助言を行ってください。\n"
-        output += "1. 現状の保有ポジション（含み益/含み損）に基づいた、最適な決済（利確・損切り）の目安価格。\n"
-        output += "2. ニュース材料とユーザーのメモから読み取れる、今後の株価シナリオ（楽観・悲観の両方）。\n"
+        output += "1. 「現在値」と「平均取得単価」を比較し、現状の含み損益を考慮した上で、最適な決済（利確・損切り）の目安価格を提示。\n"
+        output += "2. ニュース材料とメモから読み取れる、今後の株価シナリオ。\n"
         output += "3. 新規エントリーまたはナンピンを検討する場合の推奨価格帯。\n"
         
         return Response(
