@@ -8,14 +8,21 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
         body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; color: #1f2937; }
-        /* スクロールバーを見やすく */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        /* 読み込み中オーバーレイ */
+        #loading_overlay { display: none; }
+        #loading_overlay.active { display: flex; }
     </style>
 </head>
 <body class="min-h-screen pb-12">
+
+    <div id="loading_overlay" class="fixed inset-0 bg-gray-900 bg-opacity-50 z-50 justify-center items-center flex-col">
+        <div class="animate-spin rounded-full h-12 w-12 border-4 border-white border-t-transparent mb-4"></div>
+        <p class="text-white font-bold">保存中...（ニュース取得に少し時間かかるで）</p>
+    </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -82,7 +89,7 @@
 
         <div class="lg:col-span-9">
             <div class="bg-white rounded-xl shadow-lg border-t-4 border-blue-600 overflow-hidden">
-                <form action="{{ url_for('save_data') }}" method="POST" enctype="multipart/form-data">
+                <form action="{{ url_for('save_data') }}" method="POST" enctype="multipart/form-data" onsubmit="showLoading()">
                     <input type="hidden" name="log_id" id="log_id">
                     
                     <div class="border-b p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-gray-50">
@@ -139,28 +146,38 @@
 
                         <div class="grid md:grid-cols-2 gap-4">
                             <div class="space-y-2">
-                                <label class="block text-xs font-bold text-gray-500">📸 チャート画像</label>
+                                <label class="block text-xs font-bold text-gray-500">📸 チャート画像 (上書き保存のみ)</label>
                                 <div class="grid grid-cols-3 gap-2">
-                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
-                                        <span class="text-[10px] block">日足</span>
-                                        <input type="file" name="img_daily" class="hidden" onchange="preview(this, 's_daily')">
-                                        <div id="s_daily" class="text-gray-300 text-xs">未</div>
-                                    </label>
-                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
-                                        <span class="text-[10px] block">5分足</span>
-                                        <input type="file" name="img_5min" class="hidden" onchange="preview(this, 's_5min')">
-                                        <div id="s_5min" class="text-gray-300 text-xs">未</div>
-                                    </label>
-                                    <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50">
-                                        <span class="text-[10px] block">板</span>
-                                        <input type="file" name="img_board" class="hidden" onchange="preview(this, 's_board')">
-                                        <div id="s_board" class="text-gray-300 text-xs">未</div>
-                                    </label>
+                                    <div class="flex flex-col gap-1">
+                                        <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 h-full flex flex-col justify-center items-center">
+                                            <span class="text-[10px] block font-bold text-gray-500">日足</span>
+                                            <input type="file" name="img_daily" class="hidden" onchange="preview(this, 's_daily')">
+                                            <div id="s_daily" class="text-gray-300 text-xs mt-1">未</div>
+                                        </label>
+                                        <a id="btn_view_daily" href="#" target="_blank" class="hidden text-center text-[10px] bg-blue-100 text-blue-700 py-1 rounded hover:bg-blue-200">👁️ 見る</a>
+                                    </div>
+                                    <div class="flex flex-col gap-1">
+                                        <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 h-full flex flex-col justify-center items-center">
+                                            <span class="text-[10px] block font-bold text-gray-500">5分足</span>
+                                            <input type="file" name="img_5min" class="hidden" onchange="preview(this, 's_5min')">
+                                            <div id="s_5min" class="text-gray-300 text-xs mt-1">未</div>
+                                        </label>
+                                        <a id="btn_view_5min" href="#" target="_blank" class="hidden text-center text-[10px] bg-blue-100 text-blue-700 py-1 rounded hover:bg-blue-200">👁️ 見る</a>
+                                    </div>
+                                    <div class="flex flex-col gap-1">
+                                        <label class="border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 h-full flex flex-col justify-center items-center">
+                                            <span class="text-[10px] block font-bold text-gray-500">板</span>
+                                            <input type="file" name="img_board" class="hidden" onchange="preview(this, 's_board')">
+                                            <div id="s_board" class="text-gray-300 text-xs mt-1">未</div>
+                                        </label>
+                                        <a id="btn_view_board" href="#" target="_blank" class="hidden text-center text-[10px] bg-blue-100 text-blue-700 py-1 rounded hover:bg-blue-200">👁️ 見る</a>
+                                    </div>
                                 </div>
                             </div>
                             <div>
                                 <label class="block text-xs font-bold text-gray-500 mb-1">🔗 ニュースURL</label>
-                                <textarea name="urls" id="urls" class="w-full border p-2 rounded text-xs h-20" placeholder="https://..."></textarea>
+                                <textarea name="urls" id="urls" class="w-full border p-2 rounded text-xs h-20 outline-none focus:border-blue-400" placeholder="https://..."></textarea>
+                                <p class="text-[10px] text-gray-400 mt-1">※変更がない場合、再取得はスキップされます</p>
                             </div>
                         </div>
                     </div>
@@ -181,6 +198,10 @@
 
     <script>
         let currentCode = "";
+
+        function showLoading() {
+            document.getElementById('loading_overlay').classList.add('active');
+        }
 
         function showHistorySection() {
             const section = document.getElementById('history_section');
@@ -239,14 +260,26 @@
                 document.getElementById('analysis_memo').value = data.analysis_memo || "";
                 document.getElementById('urls').value = data.urls || "";
 
-                const setImg = (eid, has) => {
-                    const el = document.getElementById(eid);
-                    el.innerText = has ? "✅ 済" : "未";
-                    el.className = has ? "text-green-600 font-bold text-xs" : "text-gray-300 text-xs";
+                // 画像状態のリセットと表示設定
+                const setupImg = (type, has) => {
+                    const statusEl = document.getElementById('s_' + type.split('_')[1]);
+                    const btnEl = document.getElementById('btn_view_' + type.split('_')[1]);
+                    
+                    statusEl.innerText = has ? "✅ 保存済" : "未";
+                    statusEl.className = has ? "text-green-600 font-bold text-xs mt-1" : "text-gray-300 text-xs mt-1";
+                    
+                    if (has) {
+                        btnEl.href = `/image/${data.id}/${type}`;
+                        btnEl.classList.remove('hidden');
+                    } else {
+                        btnEl.classList.add('hidden');
+                        btnEl.href = "#";
+                    }
                 };
-                setImg('s_daily', data.has_daily);
-                setImg('s_5min', data.has_5min);
-                setImg('s_board', data.has_board);
+
+                setupImg('img_daily', data.has_daily);
+                setupImg('img_5min', data.has_5min);
+                setupImg('img_board', data.has_board);
 
                 document.getElementById('delete_btn').classList.remove('hidden');
                 document.getElementById('copy_btn').classList.remove('hidden');
@@ -256,15 +289,8 @@
 
         function createNewLogForStock() {
             if(!currentCode) return;
-            document.getElementById('log_id').value = ""; 
-            document.getElementById('memo').value = "";
-            document.getElementById('analysis_memo').value = "";
-            document.getElementById('copy_btn').classList.add('hidden');
-            document.getElementById('delete_btn').classList.add('hidden');
-            ['s_daily', 's_5min', 's_board'].forEach(id => {
-                document.getElementById(id).innerText = "未";
-                document.getElementById(id).className = "text-gray-300 text-xs";
-            });
+            resetForm();
+            document.getElementById('code').value = currentCode;
         }
 
         function createNewLog() {
@@ -272,13 +298,23 @@
             document.getElementById('history_list').innerHTML = '<p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>';
             document.getElementById('selected_code_display').innerText = "";
             document.getElementById('add_new_btn').disabled = true;
-            
+            resetForm();
+        }
+
+        function resetForm() {
             document.getElementById('log_id').value = "";
             document.getElementById('code').value = "";
             document.getElementById('name').value = "";
             document.getElementById('memo').value = "";
             ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
             
+            // 画像関連のリセット
+            ['daily', '5min', 'board'].forEach(type => {
+                document.getElementById('s_' + type).innerText = "未";
+                document.getElementById('s_' + type).className = "text-gray-300 text-xs mt-1";
+                document.getElementById('btn_view_' + type).classList.add('hidden');
+            });
+
             document.getElementById('copy_btn').classList.add('hidden');
             document.getElementById('delete_btn').classList.add('hidden');
         }
@@ -308,8 +344,8 @@
         function preview(input, id) {
             if(input.files[0]) {
                 const el = document.getElementById(id);
-                el.innerText = "✅ 選択";
-                el.className = "text-blue-600 font-bold text-xs";
+                el.innerText = "✅ 選択中";
+                el.className = "text-blue-600 font-bold text-xs mt-1";
             }
         }
     </script>
