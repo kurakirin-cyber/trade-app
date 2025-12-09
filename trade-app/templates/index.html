@@ -3,316 +3,297 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>株式トレード支援ツール</title>
-    
+    <title>トレード履歴管理ツール</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
         body { font-family: 'Noto Sans JP', sans-serif; background-color: #f3f4f6; color: #1f2937; }
-        .loader {
-            border: 4px solid #f3f3f3; border-top: 4px solid #3b82f6; border-radius: 50%;
-            width: 24px; height: 24px; animation: spin 1s linear infinite; display: none;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .modal { transition: opacity 0.25s ease; }
-        body.modal-active { overflow-x: hidden; overflow-y: hidden !important; }
-        .fade-in { animation: fadeIn 0.5s ease-out forwards; opacity: 0; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* スクロールバー装飾 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
     </style>
 </head>
-<body class="p-4 md:p-8 max-w-4xl mx-auto pb-24">
+<body class="h-screen flex flex-col overflow-hidden">
 
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
-            <div class="mb-6">
+            <div class="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 w-full max-w-lg px-4">
                 {% for category, message in messages %}
-                    <div class="p-4 mb-2 rounded-lg {% if category == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
-                        {{ message }}
+                    <div class="p-4 rounded-lg shadow-lg mb-2 flex justify-between items-center text-white {% if category == 'error' %}bg-red-500{% else %}bg-blue-600{% endif %}">
+                        <span>{{ message }}</span>
+                        <button onclick="this.parentElement.remove()" class="font-bold">×</button>
                     </div>
                 {% endfor %}
             </div>
         {% endif %}
     {% endwith %}
 
-    <header class="mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
-        <div>
-            <h1 class="text-2xl font-bold flex items-center gap-2 mb-1">
-                <span class="text-red-500 text-3xl">📈</span> 株式トレード支援ツール
-            </h1>
-            <p class="text-xs text-gray-500">v3.5 完全動作版</p>
-        </div>
-        
-        <button onclick="openNewModal()" class="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition flex justify-center items-center gap-2">
-            <span>✨ 新規銘柄を追加</span>
+    <header class="bg-white border-b px-6 py-3 flex justify-between items-center shadow-sm z-10 flex-none">
+        <h1 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+            <span>📈</span> トレード履歴管理 v4.0
+        </h1>
+        <button onclick="createNewLog()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-6 rounded-lg shadow transition flex items-center gap-2">
+            <span>＋ 完全新規作成</span>
         </button>
     </header>
 
-    <section class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-6">
-        <label class="font-bold whitespace-nowrap text-gray-700 block mb-2">登録済み銘柄を呼び出す:</label>
-        <div class="flex flex-col md:flex-row gap-2">
-            <select id="stockSelector" class="w-full p-3 border border-gray-300 rounded-lg bg-gray-50 text-lg font-bold" onchange="loadStockInfo(this.value)">
+    <div class="flex-1 flex overflow-hidden">
+        
+        <div class="w-64 bg-white border-r flex-none flex flex-col">
+            <div class="p-3 bg-gray-50 border-b font-bold text-gray-500 text-xs">📂 銘柄選択</div>
+            <div class="flex-1 overflow-y-auto p-2 space-y-1">
                 {% if not registered_envs %}
-                    <option value="">(登録された銘柄はありません)</option>
+                    <p class="text-xs text-center text-gray-400 py-4">データなし</p>
                 {% endif %}
                 {% for code, data in registered_envs.items() %}
-                    <option value="{{ code }}">{{ code }} : {{ data.name }}</option>
+                    <button onclick="selectStock('{{ code }}')" class="w-full text-left p-3 rounded hover:bg-blue-50 transition border border-transparent hover:border-blue-100 group">
+                        <div class="flex justify-between items-center">
+                            <span class="font-bold text-blue-800 text-lg">{{ code }}</span>
+                        </div>
+                        <div class="text-xs text-gray-500 truncate">{{ data.name }}</div>
+                    </button>
                 {% endfor %}
-            </select>
-            <button onclick="openEditModal()" class="w-full md:w-auto whitespace-nowrap bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 px-6 rounded-lg transition">
-                📝 編集
-            </button>
+            </div>
         </div>
-    </section>
 
-    <section class="bg-white rounded-xl p-6 shadow-sm border border-red-200 mb-8">
-        <h2 class="font-bold text-lg mb-4 flex items-center gap-2 text-red-600">
-            <span>⚡</span> AIジャッジ (5分足+板)
-        </h2>
-        <form action="{{ url_for('judge') }}" method="POST" enctype="multipart/form-data" class="space-y-4" onsubmit="showLoader()">
-            
-            <div>
-                <label class="block text-xs font-bold text-gray-500 mb-1">対象銘柄 (自動入力)</label>
-                <input type="text" name="stock_code" id="judge_code" value="{{ form_values.stock_code if form_values else '' }}" class="w-full bg-gray-100 border p-3 rounded font-bold text-xl tracking-wider text-center" required readonly placeholder="上のリストから選択">
+        <div id="history_col" class="w-64 bg-gray-50 border-r flex-none flex flex-col hidden md:flex">
+            <div class="p-3 bg-gray-100 border-b font-bold text-gray-500 text-xs flex justify-between items-center">
+                <span>🕒 履歴一覧</span>
+                <span id="selected_code_display" class="text-blue-600"></span>
             </div>
-
-            <div class="grid grid-cols-2 gap-4">
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:bg-gray-50 transition cursor-pointer relative" onclick="document.getElementById('chart_input').click()">
-                    <span class="text-3xl block mb-2">📉</span>
-                    <label class="block text-sm font-bold text-gray-600 cursor-pointer">5分足チャート</label>
-                    <input type="file" id="chart_input" name="chart_image" accept="image/*" class="hidden" onchange="previewFile(this, 'chartPreview')">
-                    <div id="chartPreview" class="text-xs text-blue-500 mt-2 font-bold truncate">未選択</div>
-                </div>
-                <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:bg-gray-50 transition cursor-pointer relative" onclick="document.getElementById('board_input').click()">
-                    <span class="text-3xl block mb-2">📊</span>
-                    <label class="block text-sm font-bold text-gray-600 cursor-pointer">板情報 (気配)</label>
-                    <input type="file" id="board_input" name="orderbook_image" accept="image/*" class="hidden" onchange="previewFile(this, 'boardPreview')">
-                    <div id="boardPreview" class="text-xs text-blue-500 mt-2 font-bold truncate">未選択</div>
-                </div>
+            <div class="p-2 border-b">
+                <button onclick="createNewLogForStock()" id="add_new_btn" class="w-full bg-white border-2 border-dashed border-gray-300 text-gray-500 py-2 rounded hover:border-blue-400 hover:text-blue-500 transition text-sm font-bold disabled:opacity-50">
+                    ＋ この銘柄で新規記録
+                </button>
             </div>
-
-            <div>
-                <label class="block text-xs font-bold text-gray-500 mb-1">今回の気付き・メモ</label>
-                <textarea name="extra_note" class="w-full border p-3 rounded-lg h-20 text-sm" placeholder="例: 3365円に大きな売り板がある...">{{ form_values.extra_note if form_values else '' }}</textarea>
+            <div id="history_list" class="flex-1 overflow-y-auto p-2 space-y-2">
+                <p class="text-xs text-gray-400 text-center mt-4">銘柄を選択してください</p>
             </div>
-            
-            <div class="grid grid-cols-2 gap-2 text-xs md:text-sm">
-                <div id="daily_chart_indicator" class="text-gray-400 text-center py-2 bg-gray-50 rounded font-bold border">
-                    日足画像: 未登録
-                </div>
-                <div id="financial_indicator" class="text-gray-400 text-center py-2 bg-gray-50 rounded font-bold border">
-                    決算情報: 未登録
-                </div>
-            </div>
-
-            <button type="submit" id="submitBtn" class="w-full bg-gradient-to-r from-red-600 to-red-500 hover:from-red-700 hover:to-red-600 text-white font-bold py-4 rounded-xl shadow-lg flex justify-center items-center gap-2 text-lg transition transform active:scale-95">
-                <span>🤖 AIで売買判断する</span>
-                <div class="loader" id="loadingSpinner"></div>
-            </button>
-        </form>
-    </section>
-
-    {% if judge_result %}
-    <section class="bg-white rounded-xl shadow-lg border-2 border-blue-100 overflow-hidden mb-8 fade-in">
-        <div class="bg-blue-50 px-6 py-4 border-b border-blue-100 flex justify-between items-center">
-            <h2 class="font-bold text-xl text-blue-900 flex items-center gap-2">
-                <span>🤖</span> AI分析レポート
-            </h2>
-            <a href="{{ url_for('index') }}" class="text-xs bg-white border border-blue-300 text-blue-600 px-3 py-1 rounded-full hover:bg-blue-600 hover:text-white transition">クリア</a>
         </div>
-        <div class="p-6">
-            {{ judge_result | safe }}
-        </div>
-    </section>
-    {% endif %}
 
-    <div id="envModal" class="modal opacity-0 pointer-events-none fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="modal-overlay absolute inset-0 bg-gray-900 opacity-60" onclick="closeModal()"></div>
-        
-        <div class="bg-white w-full md:max-w-2xl mx-auto rounded-2xl shadow-2xl z-50 overflow-y-auto max-h-[90vh] flex flex-col">
-            <div class="flex justify-between items-center p-5 border-b sticky top-0 bg-white z-10">
-                <p class="text-xl font-bold text-gray-800" id="modalTitle">📝 銘柄情報の登録</p>
-                <button class="text-gray-400 hover:text-gray-600 text-2xl" onclick="closeModal()">×</button>
-            </div>
-
-            <div class="p-6">
-                <form action="{{ url_for('register_stock') }}" method="POST" enctype="multipart/form-data" class="space-y-6">
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄コード *</label>
-                            <input type="text" name="reg_code" id="reg_code" placeholder="例: 9984" class="w-full border-2 border-gray-200 p-3 rounded-lg focus:border-green-500 focus:outline-none font-bold text-lg" required>
+        <div class="flex-1 bg-white flex flex-col overflow-hidden relative">
+            <form action="{{ url_for('save_data') }}" method="POST" enctype="multipart/form-data" class="flex-1 flex flex-col overflow-hidden">
+                <input type="hidden" name="log_id" id="log_id">
+                
+                <div class="border-b p-4 flex justify-between items-center bg-white flex-none">
+                    <div class="flex items-center gap-4">
+                        <div class="flex flex-col">
+                            <label class="text-[10px] font-bold text-gray-400">コード</label>
+                            <input type="text" name="code" id="code" class="border-b-2 border-gray-300 focus:border-blue-500 outline-none font-bold text-xl w-24 bg-transparent" placeholder="9984" required>
                         </div>
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">銘柄名</label>
-                            <input type="text" name="reg_name" id="reg_name" placeholder="例: ソフトバンクG" class="w-full border-2 border-gray-200 p-3 rounded-lg focus:border-green-500 focus:outline-none">
+                        <div class="flex flex-col flex-1">
+                            <label class="text-[10px] font-bold text-gray-400">銘柄名</label>
+                            <input type="text" name="name" id="name" class="border-b border-gray-200 focus:border-blue-500 outline-none w-full bg-transparent" placeholder="銘柄名">
                         </div>
                     </div>
-
-                    <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200 grid grid-cols-2 gap-4">
-                        <div>
-                            <label class="block text-xs font-bold text-yellow-800 mb-1">保有株数</label>
-                            <input type="number" name="reg_holding_qty" id="reg_holding_qty" value="0" class="w-full border border-yellow-300 p-2 rounded text-right bg-white">
-                        </div>
-                        <div>
-                            <label class="block text-xs font-bold text-yellow-800 mb-1">平均取得単価 (円)</label>
-                            <input type="number" name="reg_avg_cost" id="reg_avg_cost" value="0" class="w-full border border-yellow-300 p-2 rounded text-right bg-white">
-                        </div>
+                    
+                    <div class="flex gap-2">
+                        <button type="button" id="copy_btn" onclick="copyDataToClipboard()" class="hidden bg-gray-700 hover:bg-gray-800 text-white py-2 px-4 rounded shadow text-sm flex items-center gap-2">
+                            <span>📋 コピー</span>
+                        </button>
+                        
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded shadow flex items-center gap-2">
+                            <span>💾 保存</span>
+                        </button>
                     </div>
+                </div>
 
-                    <div class="bg-green-50 p-4 rounded-xl border border-green-100">
-                        <label class="block text-sm font-bold text-green-800 mb-2">① 日足チャート (環境認識用)</label>
-                        <input type="file" name="reg_daily_chart" id="reg_daily_chart" accept="image/*" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-100 file:text-green-700 hover:file:bg-green-200">
-                        <p class="text-xs text-green-600 mt-2 font-bold" id="modal_daily_status">※新規登録</p>
-                    </div>
-
-                    <div class="space-y-4">
-                        <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                            <label class="block text-sm font-bold text-gray-700 mb-2">② 決算書・適時開示 (PDF/画像)</label>
-                            <input type="file" name="reg_financial_file" id="reg_financial_file" accept="image/*,.pdf" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-gray-200 file:text-gray-700 hover:file:bg-gray-300">
-                            <p class="text-xs text-blue-600 mt-2 font-bold" id="modal_financial_status">※未登録</p>
-                            <div class="mt-2 flex gap-4 text-xs">
-                                <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="append" checked class="mr-1">追加保存</label>
-                                <label class="flex items-center cursor-pointer"><input type="radio" name="financial_mode" value="overwrite" class="mr-1">上書き</label>
+                <div class="flex-1 overflow-y-auto p-6 space-y-6">
+                    
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
+                            <h3 class="text-xs font-bold text-yellow-800 mb-2">💰 保有状況</h3>
+                            <div class="grid grid-cols-2 gap-2">
+                                <input type="number" name="holding_qty" id="holding_qty" class="border p-2 rounded text-right" placeholder="株数">
+                                <input type="number" name="avg_cost" id="avg_cost" class="border p-2 rounded text-right" placeholder="単価">
                             </div>
                         </div>
-
-                        <div>
-                            <label class="block text-xs font-bold text-gray-500 mb-1">③ 参考ニュースURL (改行で複数可)</label>
-                            <textarea name="reg_urls" id="reg_urls" placeholder="https://..." class="w-full border p-3 rounded-lg h-24 text-xs font-mono"></textarea>
-                            <div class="mt-1 flex gap-4 text-xs text-gray-500">
-                                <label class="flex items-center cursor-pointer"><input type="radio" name="news_mode" value="append" checked class="mr-1">追加</label>
-                                <label class="flex items-center cursor-pointer"><input type="radio" name="news_mode" value="overwrite" class="mr-1">上書き</label>
+                        <div class="bg-green-50 p-4 rounded-xl border border-green-200">
+                            <h3 class="text-xs font-bold text-green-800 mb-2">🎯 戦略 (NotebookLMの結果)</h3>
+                            <div class="grid grid-cols-2 gap-2">
+                                <input type="text" name="target_buy" id="target_buy" class="border p-2 rounded text-center" placeholder="買い狙い">
+                                <input type="text" name="target_sell" id="target_sell" class="border p-2 rounded text-center" placeholder="売り狙い">
                             </div>
                         </div>
                     </div>
 
-                    <div>
-                        <label class="block text-xs font-bold text-gray-500 mb-1">④ 自由メモ</label>
-                        <textarea name="reg_memo" id="reg_memo" placeholder="監視ポイントなど..." class="w-full border p-3 rounded-lg h-20 text-sm"></textarea>
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">📝 環境認識・メモ</label>
+                            <textarea name="memo" id="memo" class="w-full border p-3 rounded-lg text-sm h-40 focus:ring-2 ring-blue-100 outline-none" placeholder="気づきや考察..."></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">🤖 AI分析ログ (コピペ用)</label>
+                            <textarea name="analysis_memo" id="analysis_memo" class="w-full border p-3 rounded-lg text-sm h-40 bg-green-50 focus:ring-2 ring-green-100 outline-none" placeholder="NotebookLMの回答をここに貼り付け..."></textarea>
+                        </div>
                     </div>
 
-                    <div class="flex justify-end pt-4 gap-3 sticky bottom-0 bg-white pb-2">
-                        <button type="button" onclick="closeModal()" class="py-3 px-6 rounded-lg text-gray-500 font-bold hover:bg-gray-100 transition">キャンセル</button>
-                        <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg shadow-md transition">保存する</button>
+                    <div class="grid md:grid-cols-2 gap-4">
+                        <div class="space-y-2">
+                            <label class="block text-xs font-bold text-gray-500">📸 チャート画像 (クリックで変更)</label>
+                            <div class="flex gap-2">
+                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
+                                    日足<input type="file" name="img_daily" class="hidden" onchange="preview(this, 's_daily')">
+                                    <div id="s_daily" class="text-gray-300 mt-1">未</div>
+                                </label>
+                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
+                                    5分足<input type="file" name="img_5min" class="hidden" onchange="preview(this, 's_5min')">
+                                    <div id="s_5min" class="text-gray-300 mt-1">未</div>
+                                </label>
+                                <label class="flex-1 border-2 border-dashed rounded p-2 text-center cursor-pointer hover:bg-gray-50 text-xs">
+                                    板<input type="file" name="img_board" class="hidden" onchange="preview(this, 's_board')">
+                                    <div id="s_board" class="text-gray-300 mt-1">未</div>
+                                </label>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-gray-500 mb-1">🔗 ニュースURL</label>
+                            <textarea name="urls" id="urls" class="w-full border p-2 rounded text-xs h-16" placeholder="https://..."></textarea>
+                        </div>
                     </div>
-                </form>
+                </div>
+            </form>
+
+            <div class="absolute bottom-4 right-6">
+                <button onclick="deleteLog()" id="delete_btn" class="hidden text-red-400 text-xs hover:text-red-600 underline">
+                    この履歴を削除
+                </button>
             </div>
         </div>
     </div>
 
+    <form id="deleteForm" action="{{ url_for('delete_log') }}" method="POST" class="hidden">
+        <input type="hidden" name="delete_log_id" id="delete_log_id">
+    </form>
+
     <script>
-        function openModal() {
-            const modal = document.getElementById('envModal');
-            modal.classList.remove('opacity-0', 'pointer-events-none');
-            document.body.classList.add('modal-active');
-        }
+        let currentCode = "";
 
-        function closeModal() {
-            const modal = document.getElementById('envModal');
-            modal.classList.add('opacity-0', 'pointer-events-none');
-            document.body.classList.remove('modal-active');
-        }
-
-        function openNewModal() {
-            document.getElementById('modalTitle').innerText = "✨ 新規銘柄の登録";
-            document.getElementById('reg_code').value = "";
-            document.getElementById('reg_name').value = "";
-            document.getElementById('reg_holding_qty').value = "0";
-            document.getElementById('reg_avg_cost').value = "0";
-            document.getElementById('reg_memo').value = "";
-            document.getElementById('reg_urls').value = "";
-            document.getElementById('reg_daily_chart').value = "";
-            document.getElementById('reg_financial_file').value = "";
-            document.getElementById('modal_daily_status').innerText = "※新規";
-            document.getElementById('modal_daily_status').className = "text-xs text-gray-400 mt-2";
-            document.getElementById('modal_financial_status').innerText = "※新規";
-            document.getElementById('modal_financial_status').className = "text-xs text-gray-400 mt-2";
-            openModal();
-        }
-
-        function openEditModal() {
-            const selector = document.getElementById('stockSelector');
-            const currentCode = selector.value;
-            if(!currentCode) {
-                alert("編集する銘柄をリストから選んでな！");
+        // 銘柄選択時の処理
+        async function selectStock(code) {
+            currentCode = code;
+            document.getElementById('selected_code_display').innerText = code;
+            document.getElementById('add_new_btn').disabled = false;
+            
+            // 履歴リストを取得
+            const res = await fetch(`/get_history/${code}`);
+            const list = await res.json();
+            
+            const listEl = document.getElementById('history_list');
+            listEl.innerHTML = ""; // クリア
+            
+            if (list.length === 0) {
+                listEl.innerHTML = '<p class="text-xs text-gray-400 text-center">履歴なし</p>';
                 return;
             }
-            // データロードを確認してから開く
-            loadStockInfo(currentCode).then(() => {
-                document.getElementById('modalTitle').innerText = "📝 " + currentCode + " の編集";
-                openModal();
+
+            // 履歴ボタンを生成
+            list.forEach((item, index) => {
+                const btn = document.createElement('button');
+                btn.className = "w-full text-left p-2 rounded text-sm hover:bg-white border border-transparent hover:border-gray-200 transition mb-1 " + (index === 0 ? "bg-blue-50 border-blue-100 font-bold" : "text-gray-600");
+                btn.innerHTML = `📅 ${item.date}`;
+                btn.onclick = () => loadLogDetail(item.id);
+                listEl.appendChild(btn);
             });
+
+            // 最新のログを自動ロード
+            if(list.length > 0) loadLogDetail(list[0].id);
         }
 
-        function showLoader() {
-            const btn = document.getElementById('submitBtn');
-            const spinner = document.getElementById('loadingSpinner');
-            btn.classList.add('opacity-75', 'cursor-not-allowed');
-            spinner.style.display = 'block';
-            btn.querySelector('span').innerText = '分析中...';
-        }
-
-        function previewFile(input, targetId) {
-            const display = document.getElementById(targetId);
-            if(input.files && input.files[0]) {
-                display.innerText = "✅ " + input.files[0].name;
-                display.classList.remove('text-gray-400');
-                display.classList.add('text-blue-600', 'font-bold');
-            }
-        }
-
-        async function loadStockInfo(code) {
-            if (!code) return;
-            document.getElementById('judge_code').value = code;
-
+        // 履歴詳細のロード
+        async function loadLogDetail(id) {
             try {
-                const response = await fetch(`/get_stock/${code}`);
-                if (response.ok) {
-                    const data = await response.json();
-                    document.getElementById('reg_code').value = code;
-                    document.getElementById('reg_name').value = data.name || "";
-                    document.getElementById('reg_memo').value = data.memo || "";
-                    document.getElementById('reg_holding_qty').value = data.holding_qty || "0";
-                    document.getElementById('reg_avg_cost').value = data.avg_cost || "0";
-                    document.getElementById('reg_urls').value = data.saved_urls || "";
-                    
-                    const dailyInd = document.getElementById('daily_chart_indicator');
-                    const modalDaily = document.getElementById('modal_daily_status');
-                    if (data.has_daily_chart) {
-                        dailyInd.innerText = "✅ 日足: 登録済";
-                        dailyInd.className = "text-center py-2 bg-green-100 text-green-800 font-bold rounded border border-green-200";
-                        modalDaily.innerText = "✅ 登録済み画像あり (上書き可)";
-                        modalDaily.className = "text-xs text-green-600 mt-2 font-bold";
-                    } else {
-                        dailyInd.innerText = "⚠️ 日足: 未登録";
-                        dailyInd.className = "text-center py-2 bg-gray-100 text-gray-400 rounded border border-gray-200";
-                        modalDaily.innerText = "※未登録";
-                        modalDaily.className = "text-xs text-gray-400 mt-2";
-                    }
+                const res = await fetch(`/get_log/${id}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                
+                // フォームに値をセット
+                document.getElementById('log_id').value = data.id;
+                document.getElementById('code').value = data.code;
+                document.getElementById('name').value = data.name || "";
+                document.getElementById('holding_qty').value = data.holding_qty || "";
+                document.getElementById('avg_cost').value = data.avg_cost || "";
+                document.getElementById('target_buy').value = data.target_buy || "";
+                document.getElementById('target_sell').value = data.target_sell || "";
+                document.getElementById('memo').value = data.memo || "";
+                document.getElementById('analysis_memo').value = data.analysis_memo || "";
+                document.getElementById('urls').value = data.urls || "";
 
-                    const finInd = document.getElementById('financial_indicator');
-                    const modalFin = document.getElementById('modal_financial_status');
-                    if (data.has_financial_info) {
-                        finInd.innerText = "✅ 決算: あり";
-                        finInd.className = "text-center py-2 bg-green-100 text-green-800 font-bold rounded border border-green-200";
-                        modalFin.innerText = "✅ 登録済み情報あり (上書き可)";
-                        modalFin.className = "text-xs text-green-600 mt-2 font-bold";
-                    } else {
-                        finInd.innerText = "⚠️ 決算: 未登録";
-                        finInd.className = "text-center py-2 bg-gray-100 text-gray-400 rounded border border-gray-200";
-                        modalFin.innerText = "※未登録";
-                        modalFin.className = "text-xs text-gray-400 mt-2";
-                    }
-                }
-            } catch (e) {
-                console.error("Fetch error:", e);
+                // 画像状態
+                const setImg = (eid, has) => {
+                    const el = document.getElementById(eid);
+                    el.innerText = has ? "✅ 済" : "未";
+                    el.className = has ? "text-green-600 font-bold mt-1" : "text-gray-300 mt-1";
+                };
+                setImg('s_daily', data.has_daily);
+                setImg('s_5min', data.has_5min);
+                setImg('s_board', data.has_board);
+
+                // ボタン表示制御
+                document.getElementById('delete_btn').classList.remove('hidden');
+                document.getElementById('copy_btn').classList.remove('hidden');
+                
+            } catch(e) { console.error(e); }
+        }
+
+        // 新規作成（現在選択中の銘柄で）
+        function createNewLogForStock() {
+            if(!currentCode) return;
+            document.getElementById('log_id').value = ""; // IDを空にする＝新規扱い
+            // 銘柄コードと名前以外をクリア
+            // document.getElementById('memo').value = ""; // メモは残す？消す？今回は消す
+            // 日付が変わるので新規データとして保存される
+            alert("✨ 新しい日時で記録を作成します。\n内容を入力して「保存」を押してください。");
+            document.getElementById('memo').value = "";
+            document.getElementById('analysis_memo').value = "";
+            document.getElementById('copy_btn').classList.add('hidden');
+            document.getElementById('delete_btn').classList.add('hidden');
+        }
+
+        // 完全新規作成
+        function createNewLog() {
+            currentCode = "";
+            document.getElementById('history_list').innerHTML = "";
+            document.getElementById('log_id').value = "";
+            document.getElementById('code').value = "";
+            document.getElementById('name').value = "";
+            document.getElementById('memo').value = "";
+            // 全フィールドクリア...
+            ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
+            
+            document.getElementById('copy_btn').classList.add('hidden');
+            document.getElementById('delete_btn').classList.add('hidden');
+        }
+
+        // 削除
+        function deleteLog() {
+            const id = document.getElementById('log_id').value;
+            if(!id) return;
+            if(confirm("この履歴データを削除しますか？")) {
+                document.getElementById('delete_log_id').value = id;
+                document.getElementById('deleteForm').submit();
             }
         }
 
-        window.addEventListener('DOMContentLoaded', () => {
-            const selector = document.getElementById('stockSelector');
-            if(selector.value) loadStockInfo(selector.value);
-        });
+        // クリップボードコピー
+        async function copyDataToClipboard() {
+            const id = document.getElementById('log_id').value;
+            if(!id) return;
+            const res = await fetch(`/download_notebooklm/${id}`);
+            if(res.ok) {
+                const text = await res.text();
+                await navigator.clipboard.writeText(text);
+                alert("✅ コピーしました！");
+            }
+        }
+
+        function preview(input, id) {
+            if(input.files[0]) {
+                const el = document.getElementById(id);
+                el.innerText = "✅ 選択";
+                el.className = "text-blue-600 font-bold mt-1";
+            }
+        }
     </script>
 </body>
 </html>
