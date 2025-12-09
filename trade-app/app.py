@@ -4,7 +4,7 @@ import base64
 import io
 import datetime
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, Response, send_file
 from dotenv import load_dotenv
 import PIL.Image
 from pymongo import MongoClient
@@ -13,20 +13,27 @@ from bson.objectid import ObjectId
 load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = 'super_secret_key_for_stock_app'
+# 環境変数がない場合はフォールバック（本番では必ず環境変数を設定してな）
+app.secret_key = os.getenv("SECRET_KEY", "default_dev_secret_key")
 
-# --- MongoDBの設定 ---
+# --- MongoDBの設定 (接続をグローバルで保持) ---
 MONGO_URI = os.getenv("MONGO_URI")
+mongo_client = None
+mongo_db = None
+
+if MONGO_URI:
+    try:
+        # connect=Falseでフォーク時の接続エラーを回避（Gunicorn対策）
+        mongo_client = MongoClient(MONGO_URI, connect=False)
+        mongo_db = mongo_client['stock_app_db']
+        print("✅ MongoDB接続成功")
+    except Exception as e:
+        print(f"❌ MongoDB接続初期化エラー: {e}")
 
 def get_db_collection():
-    if not MONGO_URI: return None
-    try:
-        client = MongoClient(MONGO_URI)
-        db = client['stock_app_db']
-        return db['stocks']
-    except Exception as e:
-        print(f"DB接続エラー: {e}")
-        return None
+    if mongo_db is not None:
+        return mongo_db['stocks']
+    return None
 
 # --- 画像処理 ---
 def image_to_base64(img):
@@ -46,18 +53,21 @@ def fetch_url_content(url_text):
     }
     for url in raw_urls:
         try:
-            resp = requests.get(url, headers=headers, timeout=10)
+            # timeoutを3秒に短縮（サーバー負荷軽減とレスポンス向上）
+            resp = requests.get(url, headers=headers, timeout=3)
             if resp.status_code == 200:
                 resp.encoding = resp.apparent_encoding
                 soup = BeautifulSoup(resp.content, 'html.parser')
-                for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe']):
+                # ノイズ除去
+                for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'iframe', 'svg']):
                     tag.decompose()
                 text = soup.get_text(separator='\n', strip=True)
-                combined_text += f"\n--- [記事: {url}] ---\n{text[:3000]}...\n"
+                combined_text += f"\n--- [記事: {url}] ---\n{text[:2000]}...\n" # 文字数制限も少しきつくして軽量化
             else:
                 combined_text += f"\n[URL: {url}] アクセス不可 ({resp.status_code})\n"
         except Exception as e:
-            combined_text += f"\n[URL: {url}] エラー: {e}\n"
+            # エラーでも止まらず次へ
+            combined_text += f"\n[URL: {url}] 取得スキップ: {str(e)[:50]}...\n"
     return combined_text
 
 # --- ルート設定 ---
@@ -67,8 +77,8 @@ def index():
     stocks_data = {}
     collection = get_db_collection()
     
-    # 【重要】ここを is not None に修正！これでエラー消える！
     if collection is not None:
+        # 最新のデータを1銘柄につき1つ取得
         pipeline = [
             {"$sort": {"updated_at": -1}},
             {"$group": {
@@ -83,6 +93,10 @@ def index():
             for doc in cursor:
                 if doc.get('code'):
                     doc['_id'] = str(doc['_id'])
+                    # Base64画像データは重いので一覧には含めない
+                    if 'img_daily' in doc: del doc['img_daily']
+                    if 'img_5min' in doc: del doc['img_5min']
+                    if 'img_board' in doc: del doc['img_board']
                     stocks_data[doc['code']] = doc
         except Exception as e:
             print(f"集計エラー: {e}")
@@ -94,6 +108,7 @@ def get_history(code_id):
     collection = get_db_collection()
     if collection is None: return jsonify([]), 500
     
+    # 必要なフィールドだけ取得して軽量化
     cursor = collection.find({"code": code_id}, {"updated_at": 1, "_id": 1}).sort("updated_at", -1)
     
     history = []
@@ -115,10 +130,12 @@ def get_log(log_id):
             resp = {k: v for k, v in data.items() if k != '_id'}
             resp['id'] = str(data['_id'])
             
+            # 画像データそのものは送らず、存在フラグだけ送る
             resp['has_daily'] = bool(resp.get('img_daily'))
             resp['has_5min'] = bool(resp.get('img_5min'))
             resp['has_board'] = bool(resp.get('img_board'))
             
+            # ペイロード削減のため画像バイナリは削除
             if 'img_daily' in resp: del resp['img_daily']
             if 'img_5min' in resp: del resp['img_5min']
             if 'img_board' in resp: del resp['img_board']
@@ -129,16 +146,36 @@ def get_log(log_id):
         
     return jsonify({}), 404
 
+# 画像表示用の新ルート
+@app.route('/image/<log_id>/<img_type>')
+def get_image(log_id, img_type):
+    collection = get_db_collection()
+    if collection is None: return "DB Error", 500
+    
+    if img_type not in ['img_daily', 'img_5min', 'img_board']:
+        return "Invalid Image Type", 400
+
+    try:
+        data = collection.find_one({"_id": ObjectId(log_id)}, {img_type: 1})
+        if data and data.get(img_type):
+            img_data = base64.b64decode(data[img_type])
+            return send_file(io.BytesIO(img_data), mimetype='image/jpeg')
+        else:
+            return "Image Not Found", 404
+    except Exception as e:
+        return f"Error: {e}", 500
+
 @app.route('/save_data', methods=['POST'])
 def save_data():
     try:
         collection = get_db_collection()
         if collection is None:
-            flash('DBエラー', 'error')
+            flash('DBエラー: 接続できてへんで', 'error')
             return redirect(url_for('index'))
 
         code = request.form.get('code')
         log_id = request.form.get('log_id')
+        new_urls = request.form.get('urls', '').strip()
         
         if not code: return redirect(url_for('index'))
 
@@ -152,25 +189,37 @@ def save_data():
             "target_sell": request.form.get('target_sell', ''),
             "analysis_memo": request.form.get('analysis_memo', ''),
             "memo": request.form.get('memo', ''),
-            "urls": request.form.get('urls', ''),
+            "urls": new_urls,
             "news_content": ""
         }
 
         existing_doc = {}
         if log_id:
             existing_doc = collection.find_one({"_id": ObjectId(log_id)}) or {}
-            data["news_content"] = existing_doc.get("news_content", "")
+            
+            # URLが変わってない、かつニュース取得済みなら、再スクレイピングせずに使い回す（時短）
+            old_urls = existing_doc.get("urls", "").strip()
+            old_content = existing_doc.get("news_content", "")
+            
+            if new_urls == old_urls and old_content:
+                data["news_content"] = old_content
+            else:
+                # URLが変わった or 初回 なら取得
+                if new_urls:
+                    data['news_content'] = fetch_url_content(new_urls)
+        else:
+            # 新規作成時
+            if new_urls:
+                data['news_content'] = fetch_url_content(new_urls)
 
-        if data['urls']:
-            extracted = fetch_url_content(data['urls'])
-            if extracted:
-                data['news_content'] = extracted
-
+        # 画像処理
         for img_type in ['img_daily', 'img_5min', 'img_board']:
             file = request.files.get(img_type)
             if file and file.filename:
+                # 新しい画像がアップされたら保存
                 data[img_type] = image_to_base64(PIL.Image.open(file))
             elif log_id and existing_doc:
+                # アップされず、既存データがあるなら維持
                 data[img_type] = existing_doc.get(img_type)
 
         if log_id:
@@ -220,7 +269,6 @@ def download_notebooklm(log_id):
         output += "■ 関連ニュース・開示情報\n"
         output += f"{data.get('news_content')}\n"
         
-        # NotebookLMへの指示プロンプト
         output += "\n" + "="*30 + "\n"
         output += "■ NotebookLMへの指示 (System Prompt)\n"
         output += "あなたはプロの株式トレーダーのアシスタントです。上記のデータを分析し、以下の点について具体的な助言を行ってください。\n"
