@@ -182,10 +182,9 @@
     <script>
         let currentCode = "";
 
-        // スマホでも履歴セクションを表示させるための制御
         function showHistorySection() {
             const section = document.getElementById('history_section');
-            section.classList.remove('hidden'); // スマホでも表示
+            section.classList.remove('hidden'); 
             section.classList.add('block');
         }
 
@@ -194,7 +193,6 @@
             document.getElementById('selected_code_display').innerText = code;
             document.getElementById('add_new_btn').disabled = false;
             
-            // スマホなら履歴エリアを表示させる
             showHistorySection();
 
             const res = await fetch(`/get_history/${code}`);
@@ -205,7 +203,7 @@
             
             if (list.length === 0) {
                 listEl.innerHTML = '<p class="text-xs text-gray-400 text-center">履歴なし</p>';
-                createNewLogForStock(); // データなければ新規モードへ
+                createNewLogForStock();
                 return;
             }
 
@@ -214,7 +212,6 @@
                 btn.className = "w-full text-left p-2 rounded text-sm hover:bg-blue-50 border border-transparent transition mb-1 " + (index === 0 ? "bg-blue-50 text-blue-800 font-bold border-blue-100" : "text-gray-600");
                 btn.innerHTML = `📅 ${item.date}`;
                 btn.onclick = () => {
-                    // 選択状態の見た目を更新
                     Array.from(listEl.children).forEach(c => c.className = "w-full text-left p-2 rounded text-sm hover:bg-blue-50 text-gray-600 transition mb-1");
                     btn.className = "w-full text-left p-2 rounded text-sm bg-blue-50 text-blue-800 font-bold border border-blue-100 transition mb-1";
                     loadLogDetail(item.id);
@@ -222,18 +219,11 @@
                 listEl.appendChild(btn);
             });
 
-            // 最新をロード
             if(list.length > 0) loadLogDetail(list[0].id);
         }
 
         async function loadLogDetail(id) {
             try {
-                // スマホで見やすいようにトップへスクロールしない方がいいかもだが、フォームへ移動
-                if(window.innerWidth < 1024) {
-                    // スマホならフォームの位置まで少しスクロール
-                    // document.getElementById('code').scrollIntoView({behavior: 'smooth'});
-                }
-
                 const res = await fetch(`/get_log/${id}`);
                 if (!res.ok) return;
                 const data = await res.json();
@@ -267,12 +257,10 @@
         function createNewLogForStock() {
             if(!currentCode) return;
             document.getElementById('log_id').value = ""; 
-            // フォームをクリア（コードと名前以外）
             document.getElementById('memo').value = "";
             document.getElementById('analysis_memo').value = "";
             document.getElementById('copy_btn').classList.add('hidden');
             document.getElementById('delete_btn').classList.add('hidden');
-            // 画像状態リセット
             ['s_daily', 's_5min', 's_board'].forEach(id => {
                 document.getElementById(id).innerText = "未";
                 document.getElementById(id).className = "text-gray-300 text-xs";
