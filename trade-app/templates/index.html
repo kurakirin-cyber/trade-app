@@ -112,17 +112,39 @@
                         
                         <div class="grid md:grid-cols-2 gap-4">
                             <div class="bg-yellow-50 p-4 rounded-xl border border-yellow-200">
-                                <h3 class="text-xs font-bold text-yellow-800 mb-2">💰 保有状況</h3>
-                                <div class="grid grid-cols-2 gap-2">
-                                    <input type="number" name="holding_qty" id="holding_qty" class="border p-2 rounded text-right w-full" placeholder="株数">
-                                    <input type="number" name="avg_cost" id="avg_cost" class="border p-2 rounded text-right w-full" placeholder="単価">
+                                <h3 class="text-xs font-bold text-yellow-800 mb-2">💰 価格・保有状況</h3>
+                                <div class="space-y-2">
+                                    <div class="flex flex-col">
+                                        <label class="text-[10px] text-gray-500 mb-0.5">現在値（市場価格）</label>
+                                        <input type="number" name="current_price" id="current_price" class="border p-2 rounded text-right w-full bg-white font-bold text-gray-800" placeholder="現在値を入力">
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div class="flex flex-col">
+                                            <label class="text-[10px] text-gray-500 mb-0.5">保有株数</label>
+                                            <input type="number" name="holding_qty" id="holding_qty" class="border p-2 rounded text-right w-full bg-white" placeholder="株数">
+                                        </div>
+                                        <div class="flex flex-col">
+                                            <label class="text-[10px] text-gray-500 mb-0.5">取得単価</label>
+                                            <input type="number" name="avg_cost" id="avg_cost" class="border p-2 rounded text-right w-full bg-white" placeholder="単価">
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
+                            
                             <div class="bg-green-50 p-4 rounded-xl border border-green-200">
                                 <h3 class="text-xs font-bold text-green-800 mb-2">🎯 NotebookLM 戦略</h3>
-                                <div class="grid grid-cols-2 gap-2">
-                                    <input type="text" name="target_buy" id="target_buy" class="border p-2 rounded text-center w-full" placeholder="買い狙い">
-                                    <input type="text" name="target_sell" id="target_sell" class="border p-2 rounded text-center w-full" placeholder="売り狙い">
+                                <div class="space-y-2">
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div class="flex flex-col">
+                                            <label class="text-[10px] text-green-700 mb-0.5">買い狙い</label>
+                                            <input type="text" name="target_buy" id="target_buy" class="border p-2 rounded text-center w-full bg-white" placeholder="価格・ゾーン">
+                                        </div>
+                                        <div class="flex flex-col">
+                                            <label class="text-[10px] text-green-700 mb-0.5">売り狙い</label>
+                                            <input type="text" name="target_sell" id="target_sell" class="border p-2 rounded text-center w-full bg-white" placeholder="価格・ゾーン">
+                                        </div>
+                                    </div>
+                                    <p class="text-[10px] text-green-600 mt-1">※AIに注目させたい価格帯があれば記入</p>
                                 </div>
                             </div>
                         </div>
@@ -192,7 +214,7 @@
 
     <script>
         let currentCode = "";
-        let currentCopyText = ""; // コピー用テキストを一時保存する変数
+        let currentCopyText = "";
 
         function showLoading() {
             document.getElementById('loading_overlay').classList.add('active');
@@ -243,13 +265,13 @@
 
         async function loadLogDetail(id) {
             try {
-                // コピーボタンを「準備中」にして無効化
+                // コピーボタン無効化
                 const copyBtn = document.getElementById('copy_btn');
                 copyBtn.disabled = true;
                 copyBtn.classList.remove('bg-gray-700', 'hover:bg-gray-800');
                 copyBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
                 copyBtn.innerHTML = "<span>⌛</span><span class='hidden md:inline'>準備中...</span>";
-                currentCopyText = ""; // リセット
+                currentCopyText = "";
 
                 const res = await fetch(`/get_log/${id}`);
                 if (!res.ok) return;
@@ -258,6 +280,10 @@
                 document.getElementById('log_id').value = data.id;
                 document.getElementById('code').value = data.code;
                 document.getElementById('name').value = data.name || "";
+                
+                // --- 新しく追加した項目 ---
+                document.getElementById('current_price').value = data.current_price || "";
+                
                 document.getElementById('holding_qty').value = data.holding_qty || "";
                 document.getElementById('avg_cost').value = data.avg_cost || "";
                 document.getElementById('target_buy').value = data.target_buy || "";
@@ -285,12 +311,11 @@
 
                 document.getElementById('delete_btn').classList.remove('hidden');
                 
-                // 【重要】ここでコピー用テキストを「裏で」取得しておく（先読み）
+                // コピー用テキスト先読み
                 fetch(`/download_notebooklm/${id}`)
                     .then(r => r.text())
                     .then(text => {
                         currentCopyText = text;
-                        // 取得できたらボタンを有効化
                         copyBtn.disabled = false;
                         copyBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
                         copyBtn.classList.add('bg-gray-700', 'hover:bg-gray-800');
@@ -321,14 +346,14 @@
             document.getElementById('code').value = "";
             document.getElementById('name').value = "";
             document.getElementById('memo').value = "";
-            ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
+            ['current_price', 'holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
+            
             ['daily', '5min', 'board'].forEach(type => {
                 document.getElementById('s_' + type).innerText = "未";
                 document.getElementById('s_' + type).className = "text-gray-300 text-xs mt-1";
                 document.getElementById('btn_view_' + type).classList.add('hidden');
             });
             
-            // コピーボタンを隠す
             const copyBtn = document.getElementById('copy_btn');
             copyBtn.disabled = true;
             copyBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
@@ -348,22 +373,18 @@
         }
 
         async function copyDataToClipboard() {
-            // 先読みしたテキストがなければ何もしない
             if(!currentCopyText) {
                 alert("⚠️ まだデータの準備中やで。もうちょっと待ってな。");
                 return;
             }
-
             try {
-                // すでにデータがあるので、待機時間ゼロでコピーできる（iOSでも通る！）
                 await navigator.clipboard.writeText(currentCopyText);
                 alert("✅ コピーしたで！\nNotebookLMに貼り付けてな。");
             } catch(e) {
-                // 万が一のためのフォールバック（iOSの古いバージョン対策）
                 try {
                     const textarea = document.createElement("textarea");
                     textarea.value = currentCopyText;
-                    textarea.style.position = "fixed"; // 画面外へ
+                    textarea.style.position = "fixed"; 
                     textarea.style.left = "-9999px";
                     document.body.appendChild(textarea);
                     textarea.focus();
