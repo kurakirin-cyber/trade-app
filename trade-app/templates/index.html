@@ -52,7 +52,6 @@
         <div class="lg:col-span-3 space-y-4">
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                 <div class="p-3 bg-gray-50 border-b font-bold text-gray-500 text-xs">📂 銘柄を選択</div>
-                
                 <div class="p-3 bg-white">
                     <select id="stock_selector" onchange="selectStock(this.value)" class="w-full border border-gray-300 rounded p-2 text-sm font-bold text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500">
                         <option value="">-- 銘柄を選択 --</option>
@@ -64,7 +63,6 @@
                         {% endfor %}
                     </select>
                 </div>
-
             </div>
 
             <div id="history_section" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden lg:block">
@@ -101,8 +99,8 @@
                         </div>
                         
                         <div class="flex gap-2 w-full md:w-auto justify-end">
-                            <button type="button" id="copy_btn" onclick="copyDataToClipboard()" class="hidden bg-gray-700 hover:bg-gray-800 text-white py-2 px-4 rounded shadow text-sm flex items-center gap-2">
-                                <span>📋</span><span class="hidden md:inline">コピー</span>
+                            <button type="button" id="copy_btn" onclick="copyDataToClipboard()" disabled class="bg-gray-400 text-white py-2 px-4 rounded shadow text-sm flex items-center gap-2 transition cursor-not-allowed">
+                                <span>⌛</span><span class="hidden md:inline">準備中...</span>
                             </button>
                             <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded shadow flex items-center gap-2">
                                 <span>💾 保存</span>
@@ -194,6 +192,7 @@
 
     <script>
         let currentCode = "";
+        let currentCopyText = ""; // コピー用テキストを一時保存する変数
 
         function showLoading() {
             document.getElementById('loading_overlay').classList.add('active');
@@ -206,15 +205,13 @@
         }
 
         async function selectStock(code) {
-            if(!code) return; // 選択解除時など
+            if(!code) return; 
 
             currentCode = code;
             document.getElementById('selected_code_display').innerText = code;
             document.getElementById('add_new_btn').disabled = false;
             
             showHistorySection();
-
-            // コンボボックスの値も同期（ボタン経由とかで呼ばれた場合用）
             document.getElementById('stock_selector').value = code;
 
             const res = await fetch(`/get_history/${code}`);
@@ -246,6 +243,14 @@
 
         async function loadLogDetail(id) {
             try {
+                // コピーボタンを「準備中」にして無効化
+                const copyBtn = document.getElementById('copy_btn');
+                copyBtn.disabled = true;
+                copyBtn.classList.remove('bg-gray-700', 'hover:bg-gray-800');
+                copyBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+                copyBtn.innerHTML = "<span>⌛</span><span class='hidden md:inline'>準備中...</span>";
+                currentCopyText = ""; // リセット
+
                 const res = await fetch(`/get_log/${id}`);
                 if (!res.ok) return;
                 const data = await res.json();
@@ -264,10 +269,8 @@
                 const setupImg = (type, has) => {
                     const statusEl = document.getElementById('s_' + type.split('_')[1]);
                     const btnEl = document.getElementById('btn_view_' + type.split('_')[1]);
-                    
                     statusEl.innerText = has ? "✅ 保存済" : "未";
                     statusEl.className = has ? "text-green-600 font-bold text-xs mt-1" : "text-gray-300 text-xs mt-1";
-                    
                     if (has) {
                         btnEl.href = `/image/${data.id}/${type}`;
                         btnEl.classList.remove('hidden');
@@ -276,13 +279,24 @@
                         btnEl.href = "#";
                     }
                 };
-
                 setupImg('img_daily', data.has_daily);
                 setupImg('img_5min', data.has_5min);
                 setupImg('img_board', data.has_board);
 
                 document.getElementById('delete_btn').classList.remove('hidden');
-                document.getElementById('copy_btn').classList.remove('hidden');
+                
+                // 【重要】ここでコピー用テキストを「裏で」取得しておく（先読み）
+                fetch(`/download_notebooklm/${id}`)
+                    .then(r => r.text())
+                    .then(text => {
+                        currentCopyText = text;
+                        // 取得できたらボタンを有効化
+                        copyBtn.disabled = false;
+                        copyBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
+                        copyBtn.classList.add('bg-gray-700', 'hover:bg-gray-800');
+                        copyBtn.innerHTML = "<span>📋</span><span class='hidden md:inline'>コピー</span>";
+                    })
+                    .catch(e => console.error("Text pre-fetch failed", e));
                 
             } catch(e) { console.error(e); }
         }
@@ -295,7 +309,7 @@
 
         function createNewLog() {
             currentCode = "";
-            document.getElementById('stock_selector').value = ""; // 選択リセット
+            document.getElementById('stock_selector').value = ""; 
             document.getElementById('history_list').innerHTML = '<p class="text-xs text-gray-400 text-center py-2">銘柄を選んでな</p>';
             document.getElementById('selected_code_display').innerText = "";
             document.getElementById('add_new_btn').disabled = true;
@@ -308,14 +322,19 @@
             document.getElementById('name').value = "";
             document.getElementById('memo').value = "";
             ['holding_qty','avg_cost','target_buy','target_sell','urls','analysis_memo'].forEach(id => document.getElementById(id).value="");
-            
             ['daily', '5min', 'board'].forEach(type => {
                 document.getElementById('s_' + type).innerText = "未";
                 document.getElementById('s_' + type).className = "text-gray-300 text-xs mt-1";
                 document.getElementById('btn_view_' + type).classList.add('hidden');
             });
+            
+            // コピーボタンを隠す
+            const copyBtn = document.getElementById('copy_btn');
+            copyBtn.disabled = true;
+            copyBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+            copyBtn.innerHTML = "<span>⌛</span><span class='hidden md:inline'>準備中...</span>";
+            currentCopyText = "";
 
-            document.getElementById('copy_btn').classList.add('hidden');
             document.getElementById('delete_btn').classList.add('hidden');
         }
 
@@ -329,26 +348,32 @@
         }
 
         async function copyDataToClipboard() {
-            const id = document.getElementById('log_id').value;
-            
-            if(!id) {
-                alert("⚠️ まだ保存されてへんで！\n一度「保存」してからコピーしてな。");
+            // 先読みしたテキストがなければ何もしない
+            if(!currentCopyText) {
+                alert("⚠️ まだデータの準備中やで。もうちょっと待ってな。");
                 return;
             }
 
             try {
-                const res = await fetch(`/download_notebooklm/${id}`);
-                
-                if(res.ok) {
-                    const text = await res.text();
-                    await navigator.clipboard.writeText(text);
-                    alert("✅ コピーしたで！\nNotebookLMに貼り付けてな。");
-                } else {
-                    const errorText = await res.text();
-                    alert(`❌ コピー失敗や...\nエラー: ${errorText}\n(ステータス: ${res.status})`);
+                // すでにデータがあるので、待機時間ゼロでコピーできる（iOSでも通る！）
+                await navigator.clipboard.writeText(currentCopyText);
+                alert("✅ コピーしたで！\nNotebookLMに貼り付けてな。");
+            } catch(e) {
+                // 万が一のためのフォールバック（iOSの古いバージョン対策）
+                try {
+                    const textarea = document.createElement("textarea");
+                    textarea.value = currentCopyText;
+                    textarea.style.position = "fixed"; // 画面外へ
+                    textarea.style.left = "-9999px";
+                    document.body.appendChild(textarea);
+                    textarea.focus();
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                    alert("✅ コピーしたで！（予備モード）");
+                } catch(e2) {
+                    alert("❌ コピー失敗や...\n" + e);
                 }
-            } catch(e) { 
-                alert("❌ 接続エラーや...\n" + e);
             }
         }
 
